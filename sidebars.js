@@ -52,7 +52,7 @@ const sidebars = {
     {
       type: 'category',
       label: 'Reference',
-      items: ['reference/caveats', 'reference/glossary'],
+      items: ['reference/security', 'reference/caveats', 'reference/glossary'],
     },
   ],
 };
