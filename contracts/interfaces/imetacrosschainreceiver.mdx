@@ -1,0 +1,138 @@
+---
+title: "IMetaCrossChainReceiver: Synchronous Batch Callback"
+sidebar_label: "IMetaCrossChainReceiver"
+description: "Reference for IMetaCrossChainReceiver — the post-batch hook that lets batch submitters consume transient EEZ execution entries in a single transaction."
+---
+
+`IMetaCrossChainReceiver` is a callback interface that the EEZ central registry invokes on the `msg.sender` of `postAndVerifyBatch` when that sender is a contract. It gives you, as the batch submitter, a chance to consume transient execution entries in the same transaction as the batch post — enabling fully synchronous cross-chain composability within a single L1 block. If your address has no code (`msg.sender.code.length == 0`), the registry skips the hook entirely. Implementing this interface is optional; you only need it when you want to trigger cross-chain calls in the same transaction that posts the batch.
+
+## Interface Definition
+
+```solidity
+interface IMetaCrossChainReceiver {
+    function executeMetaCrossChainTransactions() external;
+}
+```
+
+---
+
+## `executeMetaCrossChainTransactions`
+
+```solidity
+function executeMetaCrossChainTransactions() external
+```
+
+Called by the EEZ registry after the transient execution entries are loaded and any leading immediate entries have been applied inline. At the moment your implementation receives this callback, the transient execution table is populated and all participating rollups have `lastVerifiedBlock(rollupId) == block.number`, so `executeCrossChainCall` and `executeL2TX(rollupId)` will succeed for any registered proxy.
+
+Your implementation should call the cross-chain proxies whose entries are in the transient table. Each proxy call routes through `executeCrossChainCall`, which advances the transient execution cursor. The registry does not enforce that you consume every entry — any transient entries you leave unconsumed are simply not executed (the registry performs no cleanup gate after the hook returns). Remaining entries that were in the persistent split of the batch are published unconditionally to per-rollup queues for later consumption by standalone `executeCrossChainCall` or `executeL2TX(rollupId)` transactions.
+
+If your implementation reverts, the entire `postAndVerifyBatch` call reverts with it. Design your hook to be robust or wrap individual proxy calls in `try/catch` when partial failures are acceptable.
+
+**When EEZ calls this:** Step 7 of `postAndVerifyBatch`, after:
+1. Proof verification.
+2. Per-rollup queue wipe and `lastVerifiedBlock` update.
+3. Transient table population.
+4. Inline drain of leading immediate entries (those with `proxyEntryHash == 0`).
+
+The hook fires only if `_transientExecutionIndex < _transientExecutions.length` (there are still unconsumed transient entries) AND `msg.sender.code.length > 0`.
+
+---
+
+## Usage Pattern
+
+The typical pattern is to implement `IMetaCrossChainReceiver` on the contract that orchestrates your cross-chain flow and have it call `postAndVerifyBatch` with a batch that includes transient entries for the calls you want to trigger immediately.
+
+```solidity
+contract MyOrchestrator is IMetaCrossChainReceiver {
+    IEEZ public immutable eez;
+    address public immutable proxyForContractOnL2;
+
+    constructor(address _eez, address _proxy) {
+        eez = IEEZ(_eez);
+        proxyForContractOnL2 = _proxy;
+    }
+
+    /// @notice Posts a batch and atomically consumes transient entries in one tx.
+    function postBatchAndExecute(
+        ProofSystemBatchPerVerificationEntries calldata batch,
+        bytes calldata callDataForL2Contract
+    ) external {
+        // postAndVerifyBatch will call executeMetaCrossChainTransactions()
+        // on this contract before returning.
+        eez.postAndVerifyBatch(batch);
+    }
+
+    /// @notice EEZ callback — called after transient entries are loaded.
+    function executeMetaCrossChainTransactions() external {
+        require(msg.sender == address(eez), "only EEZ");
+
+        // The transient table is live. Call the proxy directly — the proxy
+        // routes through executeCrossChainCall, consuming the next transient entry.
+        (bool success, bytes memory result) = proxyForContractOnL2.call(
+            abi.encodeWithSignature("increment()")
+        );
+        require(success, "cross-chain call failed");
+    }
+}
+```
+
+### Multi-call hook
+
+When the transient table contains multiple entries you want to consume in order, call each proxy in sequence. The transient cursor advances with each successful `executeCrossChainCall`:
+
+```solidity
+function executeMetaCrossChainTransactions() external {
+    require(msg.sender == address(eez), "only EEZ");
+
+    // First transient entry: deposit on L2
+    (bool ok1,) = depositProxy.call(
+        abi.encodeWithSignature("deposit(address,uint256)", recipient, amount)
+    );
+    require(ok1, "deposit failed");
+
+    // Second transient entry: swap on another L2
+    (bool ok2,) = swapProxy.call(
+        abi.encodeWithSignature("swap(address,address,uint256)", tokenIn, tokenOut, amountIn)
+    );
+    require(ok2, "swap failed");
+}
+```
+
+### Flash-loan style pattern
+
+A DeFi protocol that requires same-transaction settlement can use the meta hook as the settlement callback. The protocol calls `postAndVerifyBatch` (having pre-computed that the batch contains a matching entry), and its `executeMetaCrossChainTransactions` calls the cross-chain proxy to repay:
+
+```solidity
+contract FlashLoanBridgeExecutor is IMetaCrossChainReceiver {
+    address public immutable eez;
+    address public immutable repaymentProxy;
+
+    function initiateFlashLoan(
+        ProofSystemBatchPerVerificationEntries calldata batch,
+        uint256 amount
+    ) external {
+        // The batch's transient entry contains the repayment call.
+        // executeMetaCrossChainTransactions is our repayment hook.
+        IEEZ(eez).postAndVerifyBatch(batch);
+    }
+
+    function executeMetaCrossChainTransactions() external {
+        require(msg.sender == eez, "only EEZ");
+        // Repay the flash loan cross-chain in the same transaction.
+        (bool success,) = repaymentProxy.call(
+            abi.encodeWithSignature("repay(uint256)", amount)
+        );
+        require(success, "repayment failed");
+    }
+}
+```
+
+---
+
+## Security Considerations
+
+**Always verify `msg.sender`.** Anyone can call `executeMetaCrossChainTransactions` on your contract if you leave it unguarded. Check that `msg.sender == address(eez)` at the top of your implementation.
+
+**Reentrancy.** Your hook runs inside `postAndVerifyBatch`. The registry's reentry guard (`PostBatchReentry`) prevents a nested `postAndVerifyBatch` call from your hook, but you can freely call `executeCrossChainCall` and `executeL2TX`. Do not attempt to call `postAndVerifyBatch` again from within the hook.
+
+**No consumption obligation.** The registry does not check whether your hook consumed all transient entries. Unconsumed transient entries are silently abandoned — they will not appear in per-rollup queues (only the persistent split of the batch goes there). If you need entries to survive across transactions, place them in the persistent split (`transientExecutionEntryCount < entries.length`).

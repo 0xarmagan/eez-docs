@@ -22,6 +22,15 @@ const sidebarsContracts = {
       label: 'Data Types',
       items: ['data-types'],
     },
+    {
+      type: 'category',
+      label: 'Interfaces',
+      items: [
+        'interfaces/iproofsystem',
+        'interfaces/irollupcontract',
+        'interfaces/imetacrosschainreceiver',
+      ],
+    },
   ],
 };
 

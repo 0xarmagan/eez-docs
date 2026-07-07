@@ -1,0 +1,212 @@
+---
+title: "IRollupContract: Per-Rollup Manager Interface for EEZ"
+sidebar_label: "IRollupContract"
+description: "Reference for IRollupContract — the per-rollup interface for proof system membership, vkey lookup, and block-context binding in EEZ batch verification."
+---
+
+`IRollupContract` is the interface every per-rollup management contract must implement. One instance lives for each rollup registered with the EEZ central registry, pointed to by `rollups[rollupId].rollupContract`. The central registry holds only the shared state — current state root, ETH balance, and per-rollup execution queues — while ownership, proof system membership, threshold rules, and verification keys all live on the `IRollupContract` implementation. The registry queries the manager at three points in the lifecycle: once at registration (one-shot init callback), once per batch at proof verification (bulk vkey lookup), and once per batch per rollup to bind an L1-view commitment into the proof's public inputs.
+
+## Interface Definition
+
+```solidity
+interface IRollupContract {
+    function rollupContractRegistered(uint256 rollupId) external;
+
+    function checkProofSystemsAndGetVkeys(address[] calldata proofSystems)
+        external
+        view
+        returns (bytes32[] memory vkeys);
+
+    function getCustomData(uint64 blockNumber)
+        external
+        view
+        returns (bytes memory customData);
+}
+```
+
+---
+
+## `rollupContractRegistered`
+
+```solidity
+function rollupContractRegistered(uint256 rollupId) external
+```
+
+A one-shot callback fired by the EEZ registry immediately after `EEZ.registerRollup` writes the `rollupContract` pointer. This is the only way your manager learns its assigned `rollupId` — the registry does not expose a reverse lookup from contract address to rollup ID.
+
+You must store the `rollupId` value so that future calls from this contract back into the registry (specifically `EEZ.setStateRoot(rollupId, newRoot)`) can pass it explicitly. Your implementation must also guard against replay: the callback must be accepted only when `rollupId` is still in its initial unset state, and it must be rejected for any future call.
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `rollupId` | `uint256` | The [`rollupId`](/reference/glossary#rollupid) assigned by the registry. Store this value — it is the key into `rollups[rollupId]` in the central registry. |
+
+**When EEZ calls this:** Once, during `EEZ.registerRollup`, synchronously before that function returns.
+
+**What your implementation must do:**
+
+- Verify that `msg.sender` is the central EEZ registry address. Revert for any other caller.
+- Verify that the rollupId has not already been set (guard against a second call). The reference implementation uses `if (rollupId != 0) revert AlreadyRegistered()`.
+- Persist `rollupId` in storage.
+
+```solidity
+function rollupContractRegistered(uint256 _rollupId) external {
+    if (msg.sender != ROLLUPS) revert NotEEZRegistry();
+    if (rollupId != 0) revert AlreadyRegistered();
+    rollupId = _rollupId;
+}
+```
+
+---
+
+## `checkProofSystemsAndGetVkeys`
+
+```solidity
+function checkProofSystemsAndGetVkeys(
+    address[] calldata proofSystems
+) external view returns (bytes32[] memory vkeys)
+```
+
+Returns the verification key for each proof system in the input array, after enforcing that the input satisfies this rollup's threshold and that every supplied proof system is allowed. Your implementation is the enforcement point for two invariants — membership (every address in `proofSystems` must be in your allowed set) and threshold (`proofSystems.length >= threshold`). The registry does not read your threshold separately, so all threshold semantics live here. See [IProofSystem](/contracts/interfaces/iproofsystem) for how the returned vkeys are folded into each proof system's `publicInputsHash`.
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `proofSystems` | `address[]` | The subset of proof systems this rollup selected for the current batch. The registry constructs this array from the batch's global `proofSystems[]` list filtered by this rollup's `proofSystemIndex[]` mapping. The array is guaranteed by the registry to be strictly increasing by address. |
+
+#### Returns
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `vkeys` | `bytes32[]` | The verification keys parallel to `proofSystems`. Each entry must be non-zero — a zero vkey is treated by the registry as a configuration error and causes the batch to revert with `InvalidProofSystemConfig`. The length must equal `proofSystems.length`. |
+
+**When EEZ calls this:** During `postAndVerifyBatch`, in step 3 (fetch vkMatrix), before any state is mutated. The registry calls `checkProofSystemsAndGetVkeys` for each rollup participating in the batch, then builds the public input hash for each proof system.
+
+**What your implementation must do:**
+
+- Revert if `proofSystems.length < threshold` — the batch did not supply enough proof systems for this rollup.
+- Revert if any address in `proofSystems` is not in your allowed set (zero or missing vkey).
+- Return a `bytes32[]` of the same length as `proofSystems`, where each entry is the non-zero vkey for the corresponding proof system.
+
+The reference `Rollup.sol` implementation performs a single pass that simultaneously enforces strictly-increasing address order (rejecting `address(0)` and duplicates) and checks each vkey:
+
+```solidity
+function checkProofSystemsAndGetVkeys(address[] calldata proofSystems)
+    external view returns (bytes32[] memory vkeys)
+{
+    if (proofSystems.length < threshold)
+        revert ThresholdNotMet(proofSystems.length, threshold);
+
+    vkeys = new bytes32[](proofSystems.length);
+    address prev = address(0);
+    for (uint256 i = 0; i < proofSystems.length; i++) {
+        address ps = proofSystems[i];
+        if (uint160(ps) <= uint160(prev)) revert ProofSystemNotAllowed(ps);
+        bytes32 vk = verificationKey[ps];
+        if (vk == bytes32(0)) revert ProofSystemNotAllowed(ps);
+        vkeys[i] = vk;
+        prev = ps;
+    }
+}
+```
+
+---
+
+## `getCustomData`
+
+```solidity
+function getCustomData(
+    uint64 blockNumber
+) external view returns (bytes memory customData)
+```
+
+Returns an opaque blob that your rollup binds into its per-rollup verification commitment. The EEZ registry folds this data into the batch's shared public input, so your proof circuit attests to this exact L1-view commitment alongside the execution entries and state deltas. The registry calls this once per rollup per batch, keyed to the single L1 block number the whole batch is bound to.
+
+The contents are entirely rollup-defined. Your circuit determines what L1-view information it needs to verify against, and this function is where you expose it on-chain. A common pattern is to return an ABI-encoded `(blockHash, timestamp)` pair so the circuit can verify that it was built for a specific L1 state. You are free to return any bytes your circuit expects, including an empty blob when you want no block context.
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `blockNumber` | `uint64` | The L1 block number the batch is bound to, as passed in `ProofSystemBatchPerVerificationEntries.blockNumber`. Two special values have conventional meanings: `0` means no block context (your implementation should return an empty blob), and `type(uint64).max` means "latest context" (bind to the current block's timestamp and the most recent available block hash). |
+
+#### Returns
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `customData` | `bytes` | The opaque blob your rollup commits to. The registry folds it into `customDataAcc` keyed by this rollup's ID before building `sharedPublicInput`. Return an empty bytes value (`""`) when `blockNumber == 0`. |
+
+**When EEZ calls this:** During `postAndVerifyBatch`, in step 3 (verify), after fetching the vkMatrix but as part of building `sharedPublicInput`. Called once per rollup per batch, passing `batch.blockNumber`.
+
+**What your implementation must do:**
+
+- Return an empty blob for `blockNumber == 0` (no block context).
+- Return whatever L1-view commitment your circuit expects for a non-zero `blockNumber`.
+- Revert for a `blockNumber` you cannot resolve. Do not silently return a zero-hash or empty blob for an invalid block number — that would let a stale proof pass. The reference implementation reverts `BlockHashUnavailable` when `blockhash(blockNumber) == bytes32(0)` (which happens for blocks older than 256 or for the current/future block).
+
+The reference `Rollup.sol` implementation:
+
+```solidity
+function getCustomData(uint64 blockNumber)
+    external view returns (bytes memory customData)
+{
+    if (blockNumber == 0) return "";
+    if (blockNumber == type(uint64).max)
+        return abi.encode(block.timestamp, blockhash(block.number - 1));
+
+    bytes32 blockHash = blockhash(blockNumber);
+    if (blockHash == bytes32(0)) revert BlockHashUnavailable(blockNumber);
+    // timestamp is 0 because past block timestamps cannot be recovered on-chain;
+    // the off-chain prover reads it from the block header instead.
+    return abi.encode(uint256(0), blockHash);
+}
+```
+
+---
+
+## Reference Implementation: `Rollup.sol`
+
+The repository ships a reference implementation at `src/rollupContract/Rollup.sol`. It uses OpenZeppelin `Ownable` for access control and maintains a `mapping(address => bytes32) verificationKey` for proof system membership. You can deploy it as-is, extend it, or write your own conforming contract.
+
+**Constructor:**
+
+```solidity
+constructor(
+    address rollupsRegistry,  // central EEZ contract address
+    address _owner,           // initial owner
+    uint256 _threshold,       // minimum proof system count per batch
+    address[] memory proofSystems, // initial allowed proof system addresses
+    bytes32[] memory vkeys         // verification keys (parallel to proofSystems)
+)
+```
+
+**Owner-only management functions** (safe to call at any time — the registry snapshots the vkMatrix before the meta hook fires, so mutations during a batch do not affect in-flight verification):
+
+| Function | Description |
+| --- | --- |
+| `addProofSystem(address, bytes32)` | Adds a new proof system with its verification key. |
+| `removeProofSystem(address)` | Removes a proof system. If this drops the allowed set below `threshold`, new batches will revert until more PSes are added or the threshold is lowered. |
+| `updateVerificationKey(address, bytes32)` | Rotates the vkey for an existing proof system without removing it. |
+| `setThreshold(uint256)` | Updates the minimum required proof system count. Setting this above the current allowed set count effectively locks the rollup. |
+| `setStateRoot(bytes32)` | Owner escape hatch — calls `EEZ.setStateRoot(rollupId, newRoot)` directly. Locked out in any block where `postAndVerifyBatch` has already touched this rollup (`RollupBatchActiveThisBlock`). |
+
+**Registration flow:**
+
+```solidity
+// 1. Deploy the rollup manager
+Rollup rollup = new Rollup(
+    address(eez),
+    owner,
+    threshold,
+    proofSystems,
+    vkeys
+);
+
+// 2. Register with the central registry
+// This fires rollupContractRegistered(rollupId) on the manager.
+uint256 rollupId = eez.registerRollup(address(rollup), initialStateRoot);
+```
+
+After step 2, `rollup.rollupId()` returns the assigned ID and the manager is ready to participate in batches.

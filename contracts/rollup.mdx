@@ -91,7 +91,7 @@ function rollupContractRegistered(uint256 _rollupId) external
 <details>
 <summary>checkProofSystemsAndGetVkeys — Bulk vkey lookup for batch verification</summary>
 
-Reference implementation of the `IRollupContract.checkProofSystemsAndGetVkeys` interface method — see [IProofSystem](pathname:///contracts/interfaces/iproofsystem) for its role in batch verification. Enforces this rollup's `threshold` and rejects any address whose `verificationKey` is zero, then returns the vkey list parallel to the input.
+Reference implementation of the `IRollupContract.checkProofSystemsAndGetVkeys` interface method — see [IProofSystem](/contracts/interfaces/iproofsystem) for its role in batch verification. Enforces this rollup's `threshold` and rejects any address whose `verificationKey` is zero, then returns the vkey list parallel to the input.
 
 **Who can call it:** Anyone, but in practice only `EEZ` during `postAndVerifyBatch`. Called via STATICCALL so no state mutation is possible.
 
@@ -315,4 +315,4 @@ function setThreshold(uint256 newThreshold) external onlyOwner
 
 ## `IRollupContract` Interface
 
-`Rollup.sol` is one implementation of the [`IRollupContract`](pathname:///contracts/interfaces/irollupcontract) interface. Any contract that implements `rollupContractRegistered`, `checkProofSystemsAndGetVkeys`, and `getCustomData` can be registered with the `EEZ` central registry — see the interface reference for the required semantics and invariants.
+`Rollup.sol` is one implementation of the [`IRollupContract`](/contracts/interfaces/irollupcontract) interface. Any contract that implements `rollupContractRegistered`, `checkProofSystemsAndGetVkeys`, and `getCustomData` can be registered with the `EEZ` central registry — see the interface reference for the required semantics and invariants.
