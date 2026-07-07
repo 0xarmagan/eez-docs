@@ -23,7 +23,7 @@ The dashboard is organized around **scenarios** — pre-loaded examples of cross
 The main panel shows the L1 and L2 execution tables side by side. Each entry in the table displays:
 
 - **Entry index** — position in the queue.
-- **Proxy entry hash** — the `keccak256` identity of the cross-chain call (`proxyEntryHash` / `crossChainCallHash`).
+- **Action hash** — the `keccak256` identity of the cross-chain call (`actionHash`).
 - **State delta** — the `currentState → newState` transition and `etherDelta` for this entry's rollup.
 - **Call count** — number of top-level cross-chain calls in the entry.
 - **Rolling hash** — the expected hash of the executed call sequence.
@@ -63,29 +63,35 @@ The Visualizator ships with several built-in scenarios corresponding to the EEZ 
 
 | Scenario | Description |
 |---|---|
-| L1 → L2 simple call | A single entry bridging a call from L1 to an L2 counter |
-| L2 → L1 simple call | An L2 contract calling back to L1 |
-| Reentrant call | An L1 contract that receives a reentrant call from L2 mid-execution |
-| Multiple calls | An entry with several sequential cross-chain calls |
-| Revert and continue | A call that reverts with `revertSpan` isolation, execution continues |
-| Deep nested | Multi-level nesting across both chains |
+| L1 → L2 | A single L1 entry calls an L2 contract via proxy; one entry per chain, consumed sequentially by execution index |
+| L2 → L1 | A single L2 entry calls an L1 contract via proxy; one entry per chain, consumed sequentially by execution index |
+| L2 → L1 → L2 | Starts on L2, crosses to L1, and the L1 contract dispatches a reentrant nested call back to L2 via `_consumeNestedAction` |
+| L1 → L2 → L1 | Starts on L1, crosses to L2, and the L2 contract dispatches a reentrant nested call back to L1 via `_consumeNestedAction` |
+| Cross-Chain Flash Loan | A flash loan on L1 bridges tokens to L2, claims a token-gated NFT, bridges the tokens back, and repays the loan — spans three entries per chain plus a nested action for the bridge return |
 
 Select a scenario using the tabs at the top of the page.
 
-## Connecting to Custom RPC Endpoints
+## Two Visualizator Tools: Scenario Demo and Live Dashboard
 
-The Visualizator in its current form works primarily with the built-in scenario data. For live network inspection, use the EEZ trace decoder CLI (see [Trace Decoder](/tools/trace-decoder)) to produce a unified execution diagram from real transaction traces.
+The `visualizator/` directory ships two distinct, present-day tools rather than one tool with a planned future upgrade:
 
-Future versions of the Visualizator will support connecting directly to L1 and L2 RPC endpoints for live block inspection.
+- **Scenario demo (`visualizator/index.html`)** — the static, single-file HTML page described above. This is what's hosted at [https://visualizator-woad.vercel.app](https://visualizator-woad.vercel.app). It works entirely from the built-in scenario data and has no network connectivity of its own.
+- **Live dashboard (`visualizator/dashboard/`)** — a separate Vite + React + viem application that connects directly to real L1 and L2 RPC endpoints for live block inspection. Its Connection Bar lets you enter L1/L2 RPC URLs and contract addresses; the `useChainWatcher` and `useAutoDiscovery` hooks then watch both chains and stream real cross-chain execution events into the same execution-table / flow-diagram / state-panel UI as the scenario demo.
 
-## Self-Hosting with Vite
+For live network inspection without running the dashboard yourself, you can also use the EEZ trace decoder CLI (see [Trace Decoder](/tools/trace-decoder)) to produce a unified execution diagram from real transaction traces.
 
-If you want to run the Visualizator locally or customize it, the project uses Vite for development and is deployable as a static site.
+## Self-Hosting the Scenario Demo
 
-## Step 1 — Navigate to the visualizator directory
+`visualizator/index.html` is a self-contained static file with no build step — open it directly in a browser, or serve it from any static host (Vercel, Netlify, GitHub Pages, or a plain CDN).
+
+## Self-Hosting the Live Dashboard
+
+The live dashboard is a Vite project with its own `package.json`, located at `visualizator/dashboard/`.
+
+## Step 1 — Navigate to the dashboard directory
 
 ```bash
-cd visualizator
+cd visualizator/dashboard
 ```
 
 ## Step 2 — Install dependencies
@@ -100,7 +106,7 @@ npm install
 npm run dev
 ```
 
-Vite starts a local server (typically at `http://localhost:5173`). The dashboard hot-reloads on any change to the source files.
+Vite starts a local server (typically at `http://localhost:5173`). Open it, click **Connect**, and enter your L1/L2 RPC URLs and contract addresses in the Connection Bar. The dashboard hot-reloads on any change to the source files.
 
 ## Step 4 — Build for production
 

@@ -209,7 +209,8 @@ The entry's `returnData` is `abi.encode("World")`. `h1.helloL2World()` decodes i
 | Each `proofSystemIndex[]` strictly ascending, all in `[0, proofSystems.length)` | `InvalidProofSystemConfig` |
 | `transientExecutionEntryCount <= entries.length` | `TransientCountExceedsEntries` |
 | `transientLookupCallCount <= l1ToL2lookupCalls.length` | `TransientLookupCallCountExceedsLookupCalls` |
-| Each entry's `destinationRollupId` present in `rollupIdsWithProofSystems` | `RollupNotInBatch(rid)` |
+| Each `stateDeltas[].rollupId` present in `rollupIdsWithProofSystems` | `RollupNotInBatch(rid)` |
+| Each entry's `destinationRollupId` present among that entry's own `stateDeltas[].rollupId` | `EntryDestinationNotInStateDeltas(rid)` |
 | No re-entry (`_transientExecutions.length == 0`) | `PostBatchReentry` |
 
 All proofs must verify atomically — a single failure reverts the entire `postAndVerifyBatch` call. No partial verification is possible.

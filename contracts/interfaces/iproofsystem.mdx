@@ -73,12 +73,12 @@ sharedPublicInput = keccak256(abi.encodePacked(
 ```
 acc_k = bytes32(0)
 for each rollup r that selected proof system k in the batch:
-    acc_k = keccak256(abi.encode(acc_k, rollupId_r, vkMatrix[r][k]))
+    acc_k = keccak256(abi.encode(acc_k, rollupId_r, vkMatrix[r][j]))
 
 publicInputsHash[k] = keccak256(abi.encodePacked(sharedPublicInput, acc_k))
 ```
 
-`vkMatrix[r][k]` is the verification key returned by `IRollupContract.checkProofSystemsAndGetVkeys` for rollup `r`'s participation in proof system `k`. This means each proof system's `publicInputsHash` is unique: two proof systems in the same batch see different hashes even though they share the same `sharedPublicInput`.
+`vkMatrix[r][j]` is the verification key returned by `IRollupContract.checkProofSystemsAndGetVkeys` for rollup `r`'s participation in proof system `k`. Note that `j` is not simply `k`: `vkMatrix` is a JAGGED matrix — each rollup only receives vkeys for the proof systems it actually selected — so `j = _findIndexPosition(proofSystemIndex[r], k)` is a per-rollup lookup that maps the global proof system index `k` to its position within rollup `r`'s own `proofSystemIndex[]`/`vkMatrix[r]` row. This means each proof system's `publicInputsHash` is unique: two proof systems in the same batch see different hashes even though they share the same `sharedPublicInput`.
 
 ---
 

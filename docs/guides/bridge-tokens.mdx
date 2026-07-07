@@ -30,12 +30,12 @@ The Bridge is deployed with no constructor arguments so it can be placed at the 
 
 ```bash
 # Deploy Bridge on L1
-forge script script/DeployBridge.s.sol:DeployBridgeL1 \
+forge script script/DeployBridge.s.sol:BridgeDeployL1 \
   --rpc-url $L1_RPC --broadcast --private-key $PK \
   --sig "run(address,bytes32)" $ROLLUPS $SALT
 
 # Deploy Bridge on L2 (same salt → same address)
-forge script script/DeployBridge.s.sol:DeployBridgeL2 \
+forge script script/DeployBridge.s.sol:BridgeDeployL2 \
   --rpc-url $L2_RPC --broadcast --private-key $PK \
   --sig "run(address,uint256,bytes32)" $MANAGER_L2 $L2_ROLLUP_ID $SALT
 ```

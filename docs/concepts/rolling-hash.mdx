@@ -130,7 +130,7 @@ A hash-check failure is the terminal signal for all of these cases. It reverts t
 When a call is wrapped in a `revertSpan`, EEZ executes the calls inside the span normally — hashing call-begin and call-end for each — then unconditionally reverts the span's state changes via a self-call. The rolling hash from inside the span is carried back out through the revert payload, so the outer execution's rolling hash reflects that the spanned calls happened, even though the EVM rolled back their state effects.
 
 :::info
-The lookup sub-hash on `ExpectedLookup` and `LookupCall` structs uses a deliberately simpler, **untagged** formula — one keccak fold per static sub-call, verified against a separate `rollingHash` field on the lookup itself. This is distinct from the entry-level rolling hash: it serves a narrower purpose and is safe because the lookup's match key already pins the call context that the tagged events disambiguate at the entry level.
+The lookup sub-hash on `ExpectedLookup` and `LookupCall` structs is dual-schema, verified against a separate `rollingHash` field on the lookup itself: it uses the untagged schema in static mode — a deliberately simpler formula of one keccak fold per static sub-call — and the same tagged entry schema as regular execution in reverted mode. The untagged static formula is distinct from the entry-level rolling hash: it serves a narrower purpose and is safe because the lookup's match key already pins the call context that the tagged events disambiguate at the entry level.
 :::
 
 ## Troubleshooting a Mismatch

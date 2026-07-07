@@ -24,6 +24,16 @@ The `EEZ` contract is the heart of the EEZ protocol on Ethereum mainnet. It serv
 
 ---
 
+## Public State
+
+| Variable | Type | Description |
+| --- | --- | --- |
+| `rollupCounter` | `uint256` (public) | Counter used to assign sequential rollup IDs. Incremented in `registerRollup`; the next registered rollup receives `rollupCounter + 1`. |
+| `rollups` | `mapping(uint256 => RollupConfig)` (public) | Maps a rollup ID to its `RollupConfig` (manager address, state root, ether balance). A zero `rollupContract` means the ID is unregistered. |
+| `authorizedProxies` | `mapping(address => ProxyInfo)` (public, inherited from `EEZBase`) | Maps a deployed `CrossChainProxy` address to the `(originalAddress, originalRollupId)` pair it represents. A zero `originalAddress` means the address is not a registered proxy. |
+
+---
+
 ## Functions
 
 <details>
@@ -94,11 +104,18 @@ function postAndVerifyBatch(
 | `PostBatchReentry` | `postAndVerifyBatch` was called while a batch is already mid-flight (e.g., from the meta hook). |
 | `InvalidProofSystemConfig` | The batch is structurally malformed — empty `proofSystems`, length mismatch between `proofSystems` and `proofs`, empty `rollupIdsWithProofSystems`, an unregistered rollup, an out-of-range proof-system index, or an empty `proofSystemIndex` for a rollup. |
 | `DuplicateProofSystem(address)` | The `proofSystems` array is not strictly ascending (duplicates or address(0) detected). |
+| `StateDeltasNotStrictlyIncreasing(uint256)` | An entry's `stateDeltas` are not strictly increasing by `rollupId` — rejects duplicate rollups within one entry and (bounding above `MAINNET_ROLLUP_ID`) a mainnet (L1) delta. |
+| `ExpectedStateRootsNotStrictlyIncreasing(uint256)` | A top-level lookup call's `expectedStateRoots` pins are not strictly increasing by `rollupId` — same rationale as `StateDeltasNotStrictlyIncreasing`. |
 | `TransientCountExceedsEntries` | `transientExecutionEntryCount > entries.length`. |
 | `TransientLookupCallCountExceedsLookupCalls` | `transientLookupCallCount > l1ToL2lookupCalls.length`. |
-| `RollupNotInBatch(uint256)` | An entry's or lookup call's `destinationRollupId` is not in the batch's `rollupIdsWithProofSystems`. |
+| `TransientLookupCallsWithoutTransientEntries` | `transientLookupCallCount != 0` while `transientExecutionEntryCount == 0` — transient lookups are only reachable while transient entries are mid-flight, so this shape is rejected outright. |
+| `RollupNotInBatch(uint256)` | A `StateDelta.rollupId` (within an entry) or an `ExpectedStateRootPerRollup.rollupId` (within a top-level lookup call's pins) is not in the batch's `rollupIdsWithProofSystems`. |
+| `EntryDestinationNotInStateDeltas(uint256)` | An entry's or lookup call's `destinationRollupId` is not in the batch's `rollupIdsWithProofSystems`. |
+| `LookupDestinationNotPinned(uint256)` | A top-level lookup call's `destinationRollupId` is not among its own `expectedStateRoots` pins. |
+| `CallSourceNotVerified(uint256)` | An `l2ToL1Calls` entry's `sourceRollupId` is not in the host's verified rollup set (the entry's `stateDeltas`, or a top-level lookup's `expectedStateRoots` pins). MAINNET (L1) is never verified, so an L1-sourced call is always rejected here. |
+| `ReentrantDestinationNotVerified(uint256)` | A reentrant `expectedL1ToL2Calls` entry's (or nested lookup's) `destinationRollupId` is not in the host's verified rollup set. MAINNET (L1) is never a valid cross-chain destination. |
 | `InvalidProof` | At least one proof system's `verify(proof, publicInputsHash)` returned false. |
-| `ThresholdNotMet` | A rollup's manager rejected the proof-system subset because its length is below the rollup's required threshold. |
+| `ThresholdNotMet(uint256 submitted, uint256 required)` (from `Rollup`) | A rollup's manager rejected the proof-system subset because `submitted` (the subset length) is below `required` (the rollup's configured threshold). |
 | `StateRootMismatch(uint256)` | An immediate entry's `StateDelta.currentState` doesn't match the on-chain state root for that rollup at consumption time. |
 | `EtherDeltaMismatch` | The net ETH flow for an immediate entry doesn't match the `etherDelta` declared in the entry's `stateDeltas`. |
 
@@ -148,7 +165,6 @@ function executeCrossChainCall(address sourceAddress, bytes calldata callData)
 | `InsufficientRollupBalance` | Applying a negative `etherDelta` would drive a rollup's ether balance below zero. |
 | `UnconsumedL2ToL1Calls` | Not all calls in the flat `l2ToL1Calls` array were consumed by the end of the entry. |
 | `UnconsumedL1ToL2Calls` | Not all reentrant calls in `expectedL1ToL2Calls` were consumed. |
-| `ResidualEntryEtherIn` | A non-payable entry path found a non-zero ether accumulator — indicates a protocol bug. |
 
 </details>
 
@@ -184,8 +200,12 @@ function executeL2TX(uint256 rollupId) external returns (bytes memory result)
 | `ExecutionNotInCurrentBlock(uint256)` | `lastVerifiedBlock` for the rollup is not the current block — either no batch was posted this block, or entries have already expired. |
 | `L2TXNotAllowedDuringExecution` | Called while a cross-chain execution is already in progress (`_insideExecution()` is true). |
 | `ResidualEntryEtherIn` | The ether accumulator is non-zero entering this call — indicates a protocol bug. |
+| `ExecutionNotFound` | No matching pure-L2 entry (`proxyEntryHash == bytes32(0)`) exists in the active stream at the rollup's current cursor position. |
 | `StateRootMismatch(uint256)` | The entry's `StateDelta.currentState` doesn't match the current on-chain state root. |
+| `InsufficientRollupBalance` | Applying a negative `etherDelta` would drive the rollup's ether balance below zero. |
 | `RollingHashMismatch` | The rolling hash after processing doesn't match the entry's committed value. |
+| `UnconsumedL2ToL1Calls` | Not all calls in the flat `l2ToL1Calls` array were consumed by the end of the entry. |
+| `UnconsumedL1ToL2Calls` | Not all reentrant calls in `expectedL1ToL2Calls` were consumed. |
 | `EtherDeltaMismatch` | The net ETH flow doesn't match the declared `etherDelta`. |
 
 </details>
@@ -224,6 +244,8 @@ function staticCallLookup(address sourceAddress, bytes calldata callData)
 | `UnauthorizedProxy` | `msg.sender` is not a registered `CrossChainProxy`. |
 | `ExecutionNotFound` | No matching `LookupCall` was found — the hash doesn't match, or the state-root pins are stale. |
 | `ReentrantDestinationMismatch(uint256, uint256)` | Inside an execution, the matched `ExpectedLookup` declared a `destinationRollupId` that differs from the calling proxy's rollup. |
+| `RollingHashMismatch` | The rolling hash recomputed from the matched lookup's `l2ToL1Calls` doesn't match its committed `rollingHash`. |
+| `LookupCallProxyNotDeployed(address)` | A sub-call's derived source `CrossChainProxy` address has no deployed code — a `STATICCALL` to a codeless address would silently succeed as a no-op, so the prover can't pre-hash a false result. |
 
 </details>
 
@@ -447,7 +469,13 @@ function executionQueueIndex(uint256 _rollupId) external view returns (uint256)
 | `ExecutionConsumed(crossChainCallHash, rollupId, executionQueueIndex)` | Emitted when a proxy-triggered execution entry is consumed. |
 | `L2TXExecuted(rollupId, executionQueueIndex)` | Emitted when `executeL2TX` consumes an entry. |
 | `ImmediateEntrySkipped(transientIdx, revertData)` | Emitted when an immediate entry (in-line L2 transaction) reverts during `postAndVerifyBatch` step 6 (drain immediate entries). The batch continues; only that entry's state changes are rolled back. |
+| `L1ToL2CallNotFound(entryIndex, crossChainCallHash, currentL2ToL1Call, lastL1ToL2CallConsumed)` | Emitted on the deferred no-match path when a reentrant L1→L2 call has no matching `ExpectedL1ToL2Call`. The deferred flag surfaces as `ExecutionNotFound` at the entry boundary. |
+| `CallResult(entryIndex, l2ToL1CallNumber, success, returnData)` | Emitted after each L2→L1 call completes during entry processing. Not emitted for calls inside a revert span, since those events are rolled back with the span. |
+| `L1ToL2CallConsumed(entryIndex, l1ToL2CallNumber, crossChainCallHash, callCount)` | Emitted when a reentrant L1→L2 call (`ExpectedL1ToL2Call`) is consumed during execution. |
 | `EntryExecuted(entryIndex, rollingHash, l2ToL1CallsProcessed, l1ToL2CallsConsumed)` | Emitted after an entry completes successfully. |
+| `RevertSpanExecuted(entryIndex, startL2ToL1Call, span)` | Emitted after a revert span is processed via the self-call wrapper `executeInContextAndRevert`. |
+| `CrossChainProxyCreated(proxy, originalAddress, originalRollupId)` | Emitted by `createCrossChainProxy` when a new `CrossChainProxy` is deployed and registered. |
+| `CrossChainCallExecuted(crossChainCallHash, proxy, sourceAddress, callData, value)` | Emitted by `executeCrossChainCall` when a cross-chain call is dispatched via a registered proxy. |
 
 ---
 

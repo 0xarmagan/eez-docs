@@ -20,6 +20,8 @@ import UnauditedWarning from '../docs/_unaudited-warning.mdx'
 | --- | --- | --- |
 | `ROLLUP_ID` | `uint256` (immutable) | The rollup ID assigned to this L2. Must be non-zero — zero is reserved for mainnet (L1) in all cross-chain call hash computations. |
 | `SYSTEM_ADDRESS` | `address` (immutable) | The privileged address permitted to load and replace execution tables. Node-controlled; never adversarial. |
+| `executions` | `ExecutionEntry[]` | The array of pre-computed execution entries currently loaded, consumed sequentially via `executeCrossChainCall`. Replaced wholesale by `loadExecutionTable` or `executeIncomingCrossChainCall`. |
+| `lookupCalls` | `LookupCall[]` | The array of pre-computed top-level lookup call results currently loaded, resolved via `staticCallLookup` or the reverted-lookup fallback. Replaced wholesale alongside `executions`. |
 | `lastLoadBlock` | `uint256` | The block number of the most recent `loadExecutionTable` or `executeIncomingCrossChainCall` call. Entries can only be consumed in this same block. |
 | `executionIndex` | `uint256` | The cursor into the `executions` array pointing to the next entry to be consumed. Advances by one per successful `executeCrossChainCall` top-level call. |
 
@@ -108,7 +110,7 @@ The function enforces strict equality between `msg.value` and the declared `valu
 | --- | --- | --- |
 | `result` | `bytes` | The pre-computed return data from `entries[0]`, as declared in `entry.returnData`. This is the value the source chain's prover committed to as the return value for the inbound call. |
 
-**Emits**: `ExecutionTableLoaded(entries)`, `IncomingCrossChainCallExecuted(crossChainCallHash, destination, value, data, sourceAddress, sourceRollup)`, `EntryExecuted(0, rollingHash, callsProcessed, outgoingCallsConsumed)`
+**Emits**: `ExecutionTableLoaded(entries)`, `IncomingCrossChainCallExecuted(crossChainCallHash, destination, value, data, sourceAddress, sourceRollup)`, `EntryExecuted(0, rollingHash, callsProcessed, outgoingCallsConsumed)`, `CallResult(0, callNumber, success, returnData)` (per call), `OutgoingCallConsumed(0, nestedNumber, crossChainCallHash, callCount)` (per reentrant call, reachable via reentrancy), `RevertSpanExecuted(0, startCallNumber, span)` (per revert span)
 
 **Reverts**:
 
@@ -116,6 +118,7 @@ The function enforces strict equality between `msg.value` and the declared `valu
 - `EmptyEntries` — `entries.length == 0`.
 - `ValueMismatch` — `msg.value != value`.
 - `EntryHashMismatch` — `entries[0].proxyEntryHash` does not match the computed call hash.
+- `StaticCallWithValue` — a call marked `isStatic` in `entries[0]`'s call table was loaded with a non-zero `value`.
 - `RollingHashMismatch` — the rolling hash computed during execution does not match `entries[0].rollingHash`.
 - `UnconsumedIncomingCalls` — not all calls in `entries[0].incomingCalls` were consumed.
 - `UnconsumedOutgoingCalls` — not all reentrant entries in `entries[0].expectedOutgoingCalls` were consumed.
@@ -150,7 +153,7 @@ Any ETH attached to the call (`msg.value > 0`) is immediately forwarded to `SYST
 | --- | --- | --- |
 | `result` | `bytes` | The pre-computed return data from the matched execution entry (`entry.returnData`), as committed to by the prover. |
 
-**Emits**: `CrossChainCallExecuted(crossChainCallHash, msg.sender, sourceAddress, callData, msg.value)`, `ExecutionConsumed(crossChainCallHash, executionIndex)`, `EntryExecuted(entryIndex, rollingHash, callsProcessed, outgoingCallsConsumed)`, `CallResult(entryIndex, callNumber, success, returnData)` (per call), `OutgoingCallConsumed(entryIndex, nestedNumber, crossChainCallHash, callCount)` (per reentrant call)
+**Emits**: `CrossChainCallExecuted(crossChainCallHash, msg.sender, sourceAddress, callData, msg.value)`, `ExecutionConsumed(crossChainCallHash, executionIndex)`, `EntryExecuted(entryIndex, rollingHash, callsProcessed, outgoingCallsConsumed)`, `CallResult(entryIndex, callNumber, success, returnData)` (per call), `OutgoingCallConsumed(entryIndex, nestedNumber, crossChainCallHash, callCount)` (per reentrant call), `RevertSpanExecuted(entryIndex, startCallNumber, span)` (per revert span)
 
 **Reverts**:
 
@@ -158,6 +161,7 @@ Any ETH attached to the call (`msg.value > 0`) is immediately forwarded to `SYST
 - `ExecutionNotInCurrentBlock` — `lastLoadBlock != block.number`.
 - `EtherTransferFailed` — the ETH forwarding to `SYSTEM_ADDRESS` failed.
 - `ExecutionNotFound` — no matching entry or lookup call found.
+- `StaticCallWithValue` — a call marked `isStatic` in the entry's call table was loaded with a non-zero `value`.
 - `RollingHashMismatch` — post-execution hash check failed.
 - `UnconsumedIncomingCalls` — not all calls were consumed.
 - `UnconsumedOutgoingCalls` — not all reentrant calls were consumed.
@@ -196,6 +200,7 @@ In both cases, if the matched lookup has `failed == true`, the function reverts 
 
 - `UnauthorizedProxy` — caller is not a registered proxy.
 - `ExecutionNotFound` — no matching lookup entry found.
+- `LookupCallProxyNotDeployed` — a sub-call in the matched lookup's `incomingCalls` targets a source proxy address with no deployed code.
 - `RollingHashMismatch` — the sub-call rolling hash does not match the lookup's stored `rollingHash`.
 
 ---
@@ -223,6 +228,12 @@ Deploys a deterministic `CrossChainProxy` contract for the given `(originalAddre
 | Name | Type | Description |
 | --- | --- | --- |
 | `proxy` | `address` | The address of the newly deployed `CrossChainProxy` contract. |
+
+**Emits**: `CrossChainProxyCreated(proxy, originalAddress, originalRollupId)`
+
+**Reverts**:
+
+- `SameNetworkProxy` — `originalRollupId == ROLLUP_ID` (a proxy cannot represent an address on this L2's own network).
 
 ---
 
@@ -277,3 +288,4 @@ Computes the deterministic CREATE2 address for a `CrossChainProxy` without deplo
 | `CallResult(uint256 entryIndex, uint256 callNumber, bool success, bytes returnData)` | Emitted after each individual call within an entry completes. Not emitted for calls inside a `revertSpan`. |
 | `OutgoingCallConsumed(uint256 entryIndex, uint256 nestedNumber, bytes32 crossChainCallHash, uint256 callCount)` | Emitted when a reentrant (outgoing) cross-chain call is matched and consumed. |
 | `RevertSpanExecuted(uint256 entryIndex, uint256 startCallNumber, uint256 span)` | Emitted after a `revertSpan` self-call completes and state is rolled back. |
+| `CrossChainProxyCreated(address indexed proxy, address indexed originalAddress, uint256 indexed originalRollupId)` | Emitted when a new `CrossChainProxy` is deployed and registered via `createCrossChainProxy`. |

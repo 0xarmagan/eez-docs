@@ -316,6 +316,30 @@ struct RollupConfig {
 
 ---
 
+### `RollupVerification`
+
+Per-rollup deferred-consumption queue plus a per-block reset marker. Held internally by the registry (`verificationByRollup[rollupId]`) and populated by `postAndVerifyBatch`. `lastVerifiedBlock` serves three roles: a per-block reset marker (any `postAndVerifyBatch` call touching this rollup wipes `executionQueue` / `lookupQueue` and resets the cursor, so a same-block re-verify replaces rather than appends to the prior batch's entries), a read gate for consumers (`executeCrossChainCall`, `executeL2TX`, and `staticCallLookup` all require `lastVerifiedBlock == block.number` before reading), and a lockout signal for the owner-escape path `EEZ.setStateRoot`, which reverts `RollupBatchActiveThisBlock` when it equals the current block.
+
+```solidity
+struct RollupVerification {
+    uint256 lastVerifiedBlock;
+    ExecutionEntry[] executionQueue;
+    LookupCall[] lookupQueue;
+    uint256 executionQueueIndex;
+}
+```
+
+#### Fields
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `lastVerifiedBlock` | `uint256` | The block number of the most recent `postAndVerifyBatch` call that touched this rollup. Doubles as a per-block reset marker, a read gate for consumers, and the lockout check for `setStateRoot`. |
+| `executionQueue` | `ExecutionEntry[]` | The persistent, per-rollup queue of execution entries published by `postAndVerifyBatch`. Consumed in order via `executionQueueIndex`. |
+| `lookupQueue` | `LookupCall[]` | The persistent, per-rollup queue of top-level lookup calls published by `postAndVerifyBatch`. Scanned by `staticCallLookup` and reverting top-level lookup consumption. |
+| `executionQueueIndex` | `uint256` | Cursor into `executionQueue`, advanced as entries are consumed. Reset to `0` whenever the queue is wiped on a same-block re-verify. |
+
+---
+
 ## L2 Types (`IEEZL2.sol`)
 
 ### `CrossChainCall`

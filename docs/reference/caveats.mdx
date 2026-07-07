@@ -71,7 +71,9 @@ This means that the same logical action observed on L1 vs. L2 will see different
 
 ## Block Gating: Entries Are Valid for One Block Only
 
-Execution entries posted in a `postAndVerifyBatch` are **only consumable within the same L1 block** they were posted. The `RollupVerification.lastVerifiedBlock` field doubles as a read gate: `executeCrossChainCall`, `executeL2TX`, and `staticCallLookup` all check `lastVerifiedBlock(rollupId) == block.number` and revert if the check fails.
+Execution entries posted in a `postAndVerifyBatch` are **only consumable within the same L1 block** they were posted. The `RollupVerification.lastVerifiedBlock` field doubles as a read gate: `executeCrossChainCall` and `executeL2TX` both check `lastVerifiedBlock(rollupId) == block.number` and revert if the check fails.
+
+`staticCallLookup` does **not** enforce this gate. It is a `view` function that scans the active/persistent lookup tables for a matching entry and returns it regardless of which block that entry was posted in — static reads deliberately skip the block-freshness check that state-mutating consumption enforces.
 
 Practical consequences:
 

@@ -173,9 +173,12 @@ scan host's expectedLookups[] for:
 **Outside an execution** (top-level lookup path):
 
 ```text
-scan _transientLookupCalls first (meta-hook window)
-then scan lookupQueue[destinationRollupId]
-  for crossChainCallHash AND all expectedStateRoots live
+if a transient batch is currently mid-flight (_transientExecutions.length != 0):
+  scan _transientLookupCalls only
+  (no match → revert ExecutionNotFound; the persistent queue is never consulted)
+else:
+  scan lookupQueue[destinationRollupId] only
+    for crossChainCallHash AND all expectedStateRoots live
 → run sub-calls via _processNStaticCalls
 → verify untagged rolling hash
 → return returnData (or revert with it if failed == true)
@@ -192,7 +195,7 @@ On L2, `staticCallLookup` scans only the single `lookupCalls` pool by `crossChai
 | `destinationRollupId` on `LookupCall` | Present (routes to correct queue) | Absent |
 | `expectedStateRoots` | Present (L1-only) | Absent |
 | Struct field names | L1-directional (`l2ToL1Calls`, `expectedL1ToL2Calls`) | Self-relative (`incomingCalls`, `expectedOutgoingCalls`) |
-| Transient pool scan | L1 scans transient first, then persistent | L2 scans only `lookupCalls` |
+| Transient pool scan | L1 scans transient XOR persistent (whichever is active), never both | L2 scans only `lookupCalls` |
 
 ## Invariants Summary
 

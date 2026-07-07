@@ -42,9 +42,9 @@ L1: FlashLoanBridgeExecutor.onFlashLoan()
 
 This entire call tree executes within the scope of the `FlashLoan.flashLoan` call on L1, satisfying the flash loan's invariant check (`balanceAfter >= balanceBefore`) at the end.
 
-### revertSpan for Conditional Rollbacks
+### revertSpan for Forced Rollbacks
 
-Each `L2ToL1Call` carries a `revertSpan` field (see [Build Entries](/guides/build-execution-entries#l2tol1call) for the full struct). When `revertSpan > 0`, EEZ wraps the next `revertSpan` calls in an isolated revert context — if any call in the span reverts, only that span rolls back rather than the entire batch. This lets you build conditional cross-chain logic and handle failure gracefully.
+Each `L2ToL1Call` carries a `revertSpan` field (see [Build Entries](/guides/build-execution-entries#l2tol1call) for the full struct). Setting `revertSpan = N` on a call causes EEZ to execute the next `N` calls, capture their results in the rolling hash, and then forcibly roll back all of their EVM state changes — even though the calls themselves succeeded. This is different from a naturally-reverting call: a `revertSpan > 0` call succeeds at the EVM level but has its state effects undone afterward. This lets you run a call for its side effects on the destination chain (or to produce a result you need for the rolling hash) without letting those state changes persist.
 
 ### The ETH Accounting Invariant (etherDelta)
 
@@ -96,6 +96,8 @@ The `onFlashLoan` callback in `FlashLoanBridgeExecutor` performs three steps:
 
 ```solidity
 function onFlashLoan(address _token, uint256 amount) external override {
+    require(msg.sender == address(flashLoanPool), "Unauthorized");
+
     // Step 1: Bridge tokens to executor on L2
     IERC20(_token).approve(address(bridge), amount);
     bridge.bridgeTokens(_token, amount, l2RollupId, executorL2);
