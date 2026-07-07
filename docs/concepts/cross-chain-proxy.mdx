@@ -63,7 +63,7 @@ The `CREATE2` salt does not include `block.chainid`. The same `(originalAddress,
 
 When a contract calls a proxy (directly or through its `fallback` function), the proxy has to decide between two paths:
 
-- **Execute path** — used when the caller expects the cross-chain call to run and produce state changes. EEZ locates the matching [`ExecutionEntry`](pathname:///reference/glossary#executionentry) in the queue, runs the flat call array, verifies the [rolling hash](pathname:///reference/glossary#rollinghash), applies state deltas, and returns the pre-computed return data.
+- **Execute path** — used when the caller expects the cross-chain call to run and produce state changes. EEZ locates the matching [`ExecutionEntry`](/reference/glossary#executionentry) in the queue, runs the flat call array, verifies the [rolling hash](/reference/glossary#rollinghash), applies state deltas, and returns the pre-computed return data.
 - **Lookup path** — used when the caller is in a read-only context (e.g., a Solidity `view` function). EEZ looks up the pre-recorded result in the `expectedLookups` table (if inside an execution) or the lookup pool (if outside), verifies the lookup's sub-call hash, and returns the cached result. No state changes occur.
 
 The decision hinges on whether the current EVM frame is inside a `STATICCALL`. Since Solidity has no built-in way to introspect that, the proxy uses a clever detection trick described below.
@@ -152,5 +152,5 @@ address predicted = eez.computeCrossChainProxyAddress(0xAlice, 2);
 EEZ auto-creates proxies during execution (the manager checks for code at the computed address and deploys if missing). For lookup sub-calls processed in a static context, however, proxies must already exist — deploying a contract is a state-mutating operation and cannot happen inside a `STATICCALL`. If a lookup needs a proxy that hasn't been deployed yet, the batch reverts.
 
 :::note
-A proxy always represents a **remote** identity. Creating a proxy for an address on the manager's own chain — `originalRollupId == 0` (`MAINNET_ROLLUP_ID`) on L1, or `originalRollupId == ROLLUP_ID` on L2 — reverts. See the [glossary](pathname:///reference/glossary#rollupid) for the `rollupId` numbering rules.
+A proxy always represents a **remote** identity. Creating a proxy for an address on the manager's own chain — `originalRollupId == 0` (`MAINNET_ROLLUP_ID`) on L1, or `originalRollupId == ROLLUP_ID` on L2 — reverts. See the [glossary](/reference/glossary#rollupid) for the `rollupId` numbering rules.
 :::

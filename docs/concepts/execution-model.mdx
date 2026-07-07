@@ -21,12 +21,12 @@ This simulation produces two kinds of outputs:
 
 ## The `ExecutionEntry`
 
-The [`ExecutionEntry`](pathname:///reference/glossary#executionentry) is the central pre-computed record for a single cross-chain interaction. Conceptually it holds four kinds of information:
+The [`ExecutionEntry`](/reference/glossary#executionentry) is the central pre-computed record for a single cross-chain interaction. Conceptually it holds four kinds of information:
 
 - **What state changes** — a list of pre-state → post-state transitions, one per rollup the entry touches, plus a signed ETH change for each.
 - **What calls run** — the exact sequence of top-level calls plus any reentrant callbacks, in a single flat array so on-chain execution never has to search or branch.
 - **What the calls return** — pre-computed return data for the top-level call, pre-recorded outcomes for reentrant callbacks, and pre-recorded outcomes for static-reads and reverting calls.
-- **How to check integrity** — an expected [`rollingHash`](pathname:///reference/glossary#rollinghash) that must match after every call has been replayed, plus a `proxyEntryHash` that routes the entry (immediate vs. proxy-triggered — see [transient vs. deferred](pathname:///reference/glossary#transient-vs-deferred)).
+- **How to check integrity** — an expected [`rollingHash`](/reference/glossary#rollinghash) that must match after every call has been replayed, plus a `proxyEntryHash` that routes the entry (immediate vs. proxy-triggered — see [transient vs. deferred](/reference/glossary#transient-vs-deferred)).
 
 If the live state root doesn't match the entry's expected pre-state, EEZ reverts. This is the protocol's safety backstop: even if a stale entry somehow makes it into the queue, it cannot corrupt state.
 

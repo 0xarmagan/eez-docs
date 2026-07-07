@@ -55,7 +55,7 @@ Each rollup's queue is fully independent. A `postAndVerifyBatch` for rollup A do
 
 `EEZL2.sol` is deliberately simpler than its L1 counterpart. It has no rollup registry, no state delta accounting, and no proof verification — all of that responsibility sits on L1. The L2 contract's only job is to execute the execution tables that the system address loads into it.
 
-The L2 contract is constructed with two immutables: `ROLLUP_ID` (the rollup's ID in the L1 registry) and [`SYSTEM_ADDRESS`](pathname:///reference/glossary#system-address). Only `SYSTEM_ADDRESS` can call `loadExecutionTable` or `executeIncomingCrossChainCall`.
+The L2 contract is constructed with two immutables: `ROLLUP_ID` (the rollup's ID in the L1 registry) and [`SYSTEM_ADDRESS`](/reference/glossary#system-address). Only `SYSTEM_ADDRESS` can call `loadExecutionTable` or `executeIncomingCrossChainCall`.
 
 **`loadExecutionTable(entries, lookupCalls)`** wipes the existing table and loads fresh entries. Entries are only consumable in the same block they were loaded (`lastLoadBlock == block.number`). After that block, the table is unreachable until the next `loadExecutionTable` call.
 

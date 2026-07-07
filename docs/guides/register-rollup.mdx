@@ -70,6 +70,6 @@ The `rollupContract` pointer in the EEZ registry is immutable after registration
 
 ## Key addresses and IDs
 
-See [`rollupId`](pathname:///reference/glossary#rollupid) in the glossary for the full definition, including the `MAINNET_ROLLUP_ID = 0` sentinel and immutability rules.
+See [`rollupId`](/reference/glossary#rollupid) in the glossary for the full definition, including the `MAINNET_ROLLUP_ID = 0` sentinel and immutability rules.
 
 Your `rollupId` is the single identifier you pass everywhere: `destinationRollupId` in execution entries, the rollup ID argument to `executeL2TX`, and the ID forwarded in cross-chain call hashes. Keep it accessible — your builder node needs it at batch construction time. In your manager's storage, a `rollupId` of `0` doubles as the "not yet registered" sentinel — never use it as a live rollup identifier before the registration callback fires.

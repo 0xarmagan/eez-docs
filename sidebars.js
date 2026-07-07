@@ -49,6 +49,11 @@ const sidebars = {
       label: 'Tools',
       items: ['tools/trace-decoder', 'tools/visualizator'],
     },
+    {
+      type: 'category',
+      label: 'Reference',
+      items: ['reference/caveats', 'reference/glossary'],
+    },
   ],
 };
 
