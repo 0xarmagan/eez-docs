@@ -218,19 +218,21 @@ This call atomically loads the L2 execution entry and drives `HelloWorldL2.getWo
 
 ## What just happened?
 
-## Step 1 — Off-chain pre-computation
+Four things happened in sequence, spanning both chains:
+
+### Off-chain pre-computation
 
 The E2E script pre-computed the full execution trace: what calls to make on L2, what return data to expect, and what the resulting state root would be. This is the job of the rollup sequencer node in production.
 
-## Step 2 — On-chain proof verification
+### On-chain proof verification
 
 `postAndVerifyBatch` verified the proof from `AcceptAllProofSystem`, confirmed the public inputs hash covered every entry and lookup call, marked rollup ID 1 as verified for the current block, and loaded the execution entry into the transient queue.
 
-## Step 3 — Cross-chain call execution
+### Cross-chain call execution
 
 `HelloWorldL1.helloL2World()` called the CrossChainProxy, which forwarded to `EEZ.executeCrossChainCall`. The registry consumed the queued entry, checked the `proxyEntryHash` matched the call hash, verified the rolling hash, applied the state delta, and returned `abi.encode("World")`.
 
-## Step 4 — L2 execution
+### L2 execution
 
 The system address on L2 loaded the L2 entry into `EEZL2` and drove `HelloWorldL2.getWord()`. The L2 contract returned `"World"`, the rolling hash was verified, and the execution completed.
 
