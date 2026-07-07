@@ -7,7 +7,11 @@
  */
 const sidebarsContracts = {
   contractsSidebar: [
-    {type: 'doc', id: 'eez'},
+    {
+      type: 'category',
+      label: 'L1 Contracts',
+      items: ['eez', 'rollup', 'bridge'],
+    },
   ],
 };
 

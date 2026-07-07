@@ -1,0 +1,396 @@
+---
+title: "Bridge.sol & WrappedToken: Periphery Bridge Reference"
+sidebar_label: "Bridge"
+description: "Complete reference for Bridge.sol and WrappedToken.sol — the periphery contracts for bridging ETH and ERC20 tokens across rollups."
+---
+
+The `Bridge` contract is a periphery component that handles locking, minting, burning, and releasing assets as they move between rollups in the EEZ network. It is deployed at the same address on every chain via CREATE2 (no constructor arguments), then configured per-chain via `initialize`. When you bridge a native token outbound, the Bridge locks it and calls through a `CrossChainProxy` to instruct the destination-chain Bridge to release or mint the equivalent amount. When a wrapped token is bridged back toward its origin chain, the Bridge burns it before triggering the unlock on the other side.
+
+The `WrappedToken` contract is the ERC-20 representation minted on destination chains for tokens that originate elsewhere. Each `WrappedToken` is deployed by the Bridge via CREATE2 and can only be minted or burned by the Bridge that deployed it.
+
+:::warning
+**Illustrative example only.** `Bridge.sol` and `WrappedToken.sol` are reference implementations intended to demonstrate the EEZ cross-chain pattern. They are not production-hardened: there is no fee-on-transfer token accounting, no multi-chain deployment authorization, and no decentralized deployment strategy. Audit and harden these contracts before any production use.
+:::
+
+---
+
+## Bridge
+
+### State
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `manager` | `IEEZ` | The cross-chain manager contract (`EEZ` on L1, `EEZL2` on L2). Set by `initialize`. |
+| `rollupId` | `uint256` | This chain's rollup ID (`0` for L1 mainnet). Set by `initialize`. |
+| `admin` | `address` | The admin that can call `setCanonicalBridgeAddress`. Set by `initialize`. |
+| `canonicalBridgeAddress` | `address` | Optional override for the bridge's own address used in cross-chain proxy lookups. If unset (`address(0)`), `address(this)` is used. |
+| `wrappedTokens` | `mapping(bytes32 => address)` | Maps a `(originalToken, originalRollupId)` salt to the deployed `WrappedToken` address. |
+| `wrappedTokenInfo` | `mapping(address => TokenInfo)` | Reverse lookup from a `WrappedToken` address back to its `originalToken` and `originalRollupId`. |
+
+---
+
+### Functions
+
+<details>
+<summary>initialize — Configure chain-specific state after CREATE2 deployment</summary>
+
+`initialize` sets the chain-specific configuration for a Bridge instance. Because the Bridge is designed to be deployed at the same deterministic address on every chain via CREATE2, it has no constructor arguments and instead relies on this one-time initialization call. You must call this immediately after deployment, before any bridging operations. It can only be called once — a second call reverts.
+
+**Who can call it:** Anyone, but only once per deployment.
+
+**Emits:** `Initialized(manager, rollupId, admin)`
+
+```solidity
+function initialize(address _manager, uint256 _rollupId, address _admin) external
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `_manager` | `address` | The address of the cross-chain manager contract on this chain — `EEZ` on L1, `EEZL2` on L2. The Bridge uses this to call `createCrossChainProxy`, `computeCrossChainProxyAddress`, and (indirectly) to route cross-chain calls. Must not be `address(0)`. |
+| `_rollupId` | `uint256` | This chain's rollup ID. Use `0` for L1 mainnet. This value is embedded in the calldata sent to the destination chain so the destination Bridge knows where the original token lives. |
+| `_admin` | `address` | The address permitted to call `setCanonicalBridgeAddress`. Must not be `address(0)`. |
+
+#### Errors
+
+| Error | Condition |
+|-------|-----------|
+| `AlreadyInitialized` | `initialize` has already been called (the `manager` address is already set). |
+| `ZeroAddress` | `_manager` or `_admin` is `address(0)`. |
+
+</details>
+
+<details>
+<summary>bridgeEther — Bridge ETH to a destination rollup</summary>
+
+`bridgeEther` initiates an outbound ETH bridge. You send ETH with the call and the Bridge forwards it through a `CrossChainProxy` that represents `destinationAddress` on the destination rollup. From the EEZ protocol's perspective, this is a standard cross-chain call carrying ETH. The corresponding entry in the proven batch on the destination chain will instruct the destination Bridge to release or credit the ETH to the recipient.
+
+**Who can call it:** Anyone. Must send a non-zero `msg.value`.
+
+**Emits:** `EtherBridged(sender, rollupId, amount)`
+
+```solidity
+function bridgeEther(uint256 _rollupId, address destinationAddress) external payable
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `rollupId` | `uint256` | The destination rollup ID. The Bridge will route the ETH through the `CrossChainProxy` that represents `destinationAddress` on this rollup. A proxy is deployed via `createCrossChainProxy` if one does not already exist. |
+| `destinationAddress` | `address` | The recipient address on the destination rollup. The Bridge looks up (or deploys) the `CrossChainProxy` that represents this address on the destination chain, then sends `msg.value` to it. |
+
+#### Errors
+
+| Error | Condition |
+|-------|-----------|
+| `ZeroAmount` | `msg.value` is `0`. |
+| `ProxyCallFailed(bytes reason)` | The low-level call to the `CrossChainProxy` reverted. The `reason` bytes carry the inner revert payload. |
+
+</details>
+
+<details>
+<summary>bridgeTokens — Bridge an ERC20 token to a destination rollup</summary>
+
+`bridgeTokens` initiates an outbound ERC-20 bridge using the lock-and-mint model. You approve the Bridge to spend your tokens first, then call this function. If `token` is a native token on this chain, the Bridge locks it by transferring it into custody (`safeTransferFrom`). If `token` is a `WrappedToken` previously minted by this Bridge (i.e., it originated on another chain), the Bridge burns it instead and traces the call back to the original token and rollup. Either way, the Bridge then calls through the appropriate `CrossChainProxy` to trigger `receiveTokens` on the destination chain.
+
+**Who can call it:** Anyone. You must have approved the Bridge for at least `amount` of `token`.
+
+**Emits:** `TokensBridged(token, sender, rollupId, amount)`
+
+```solidity
+function bridgeTokens(
+    address token,
+    uint256 amount,
+    uint256 _rollupId,
+    address destinationAddress
+) external
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `token` | `address` | The ERC-20 token to bridge. Can be a native token held on this chain (will be locked) or a `WrappedToken` minted by this Bridge for a foreign token (will be burned). Must not be `address(0)`. |
+| `amount` | `uint256` | The number of token units to bridge. Must be greater than zero. You must have approved the Bridge to spend at least this amount before calling. |
+| `rollupId` | `uint256` | The destination rollup ID. Determines which rollup's Bridge contract will receive the `receiveTokens` call. |
+| `destinationAddress` | `address` | The recipient address on the destination rollup. |
+
+#### Errors
+
+| Error | Condition |
+|-------|-----------|
+| `ZeroAmount` | `amount` is `0`. |
+| `ZeroAddress` | `token` is `address(0)`. |
+| `ProxyCallFailed(bytes reason)` | The call to the `CrossChainProxy` reverted. The `reason` bytes carry the inner revert payload. |
+
+</details>
+
+<details>
+<summary>receiveTokens — Inbound handler called via cross-chain execution</summary>
+
+`receiveTokens` is the inbound side of the ERC-20 bridge. It is called by the EEZ execution layer through a `CrossChainProxy` — specifically, the `CrossChainProxy` representing this Bridge from the source rollup. You should never call this function directly. If `originalRollupId` matches this chain's `rollupId`, the token is native here and the Bridge releases locked funds. Otherwise, the token originated elsewhere and the Bridge deploys a `WrappedToken` (if one does not already exist) and mints to the recipient.
+
+**Who can call it:** Only the `CrossChainProxy` representing this Bridge from `sourceRollupId`. Any other caller reverts.
+
+**Emits:** `TokensReleased(token, to, amount)` for native releases; `WrappedTokensMinted(wrappedToken, to, amount)` for foreign mints; `WrappedTokenDeployed(wrappedToken, originalToken, originalRollupId)` on first deployment.
+
+```solidity
+function receiveTokens(
+    address originalToken,
+    uint256 originalRollupId,
+    address to,
+    uint256 amount,
+    string calldata name,
+    string calldata symbol,
+    uint8 tokenDecimals,
+    uint256 sourceRollupId
+) external
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `originalToken` | `address` | The token address on the chain where it was originally issued. Used together with `originalRollupId` to compute the deterministic `WrappedToken` salt, or to identify the native token to release if `originalRollupId == rollupId`. |
+| `originalRollupId` | `uint256` | The rollup ID of the chain where the token was originally issued. If this equals this chain's `rollupId`, the token is native here and locked funds are released. Otherwise, a `WrappedToken` is deployed (first bridge) or looked up (subsequent bridges) and minted. |
+| `to` | `address` | The recipient address on this chain. |
+| `amount` | `uint256` | The number of token units to release or mint. |
+| `name` | `string` | The token name. Used only during the first bridge (when the `WrappedToken` has not yet been deployed). Subsequent bridges for the same token ignore this value. |
+| `symbol` | `string` | The token symbol. Used only during the first `WrappedToken` deployment. |
+| `tokenDecimals` | `uint8` | The token's decimal precision. Used only during the first `WrappedToken` deployment. |
+| `sourceRollupId` | `uint256` | The rollup ID from which this bridge call originated. Used to identify the expected `CrossChainProxy` caller — the Bridge validates that `msg.sender` is `manager.computeCrossChainProxyAddress(_bridgeAddress(), sourceRollupId)`. |
+
+#### Errors
+
+| Error | Condition |
+|-------|-----------|
+| `UnauthorizedCaller` | `msg.sender` is not the expected `CrossChainProxy` for `sourceRollupId`. |
+
+</details>
+
+<details>
+<summary>getWrappedToken — Look up the WrappedToken for a foreign token</summary>
+
+`getWrappedToken` returns the address of the `WrappedToken` that was deployed for a given `(originalToken, originalRollupId)` pair. Returns `address(0)` if the token has never been bridged through this Bridge. You can use this to check whether a wrapped version of a foreign token already exists before bridging.
+
+**Who can call it:** Anyone.
+
+```solidity
+function getWrappedToken(address originalToken, uint256 originalRollupId)
+    external
+    view
+    returns (address)
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `originalToken` | `address` | The token address on the chain where it was originally issued. |
+| `originalRollupId` | `uint256` | The rollup ID where the token was originally issued. |
+
+#### Returns
+
+| Name | Type | Description |
+| --- | --- | --- |
+| — | `address` | The address of the deployed `WrappedToken` for this pair, or `address(0)` if the token has not yet been bridged. Once deployed, the `WrappedToken` is permanent at this address for the lifetime of the Bridge. |
+
+</details>
+
+<details>
+<summary>setCanonicalBridgeAddress — Override the bridge address for proxy lookups</summary>
+
+`setCanonicalBridgeAddress` sets an explicit override for the address this Bridge presents as its own canonical address when computing `CrossChainProxy` lookups. Normally `address(this)` is used, but if the Bridge is deployed behind a proxy, or if the same logical Bridge address differs between chains, you can set an override here. This is currently used for testing purposes; a decentralized deployment strategy is not yet defined.
+
+**Who can call it:** Admin only (`onlyAdmin`).
+
+**Emits:** `CanonicalBridgeAddressSet(addr)`
+
+```solidity
+function setCanonicalBridgeAddress(address bridgeAddress) external onlyAdmin
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `bridgeAddress` | `address` | The address to use as this Bridge's canonical address. Set to `address(0)` to revert to the default behaviour of using `address(this)`. |
+
+#### Errors
+
+| Error | Condition |
+|-------|-----------|
+| `OnlyAdmin` | `msg.sender` is not the `admin` address. |
+
+</details>
+
+### Events
+
+| Event | Description |
+|-------|-------------|
+| `Initialized(manager, rollupId, admin)` | Emitted once by `initialize` when the Bridge is configured. |
+| `CanonicalBridgeAddressSet(addr)` | Emitted when the admin overrides the canonical bridge address. |
+| `EtherBridged(sender, rollupId, amount)` | Emitted when ETH is successfully queued for bridging via `bridgeEther`. |
+| `TokensBridged(token, sender, rollupId, amount)` | Emitted when tokens are locked or burned for bridging via `bridgeTokens`. |
+| `TokensReleased(token, to, amount)` | Emitted when native tokens are released to a recipient via `receiveTokens`. |
+| `WrappedTokensMinted(wrappedToken, to, amount)` | Emitted when wrapped tokens are minted for a recipient via `receiveTokens`. |
+| `WrappedTokenDeployed(wrappedToken, originalToken, originalRollupId)` | Emitted when a `WrappedToken` is deployed for the first time for a given `(originalToken, originalRollupId)` pair. |
+
+---
+
+### Token Flow
+
+The Bridge follows a **lock-and-mint / burn-and-release** pattern:
+
+| Direction | Native token | Wrapped token |
+|-----------|-------------|---------------|
+| **Outbound** (`bridgeTokens`) | Locked in Bridge | Burned |
+| **Inbound** (`receiveTokens`) | Released from Bridge | Minted (deployed on first bridge) |
+
+The `CrossChainProxy` security model ensures that `receiveTokens` can only be called when a ZK-proven execution entry authorises it. The proxy's `onlyBridgeProxy` modifier validates that `msg.sender` is the deterministic proxy address for this Bridge from the source rollup — any call from an address that is not that proxy reverts immediately.
+
+---
+
+## WrappedToken
+
+`WrappedToken` is an ERC-20 contract that represents a token bridged from another rollup. It is deployed by the Bridge via CREATE2 using a salt derived from `keccak256(abi.encodePacked(originalToken, originalRollupId))`, ensuring a unique and deterministic address for each foreign token. Only the Bridge that deployed a `WrappedToken` can mint or burn it.
+
+`WrappedToken` inherits from OpenZeppelin `ERC20` and `ERC20Permit`, giving holders gas-efficient `permit`-based approvals in addition to standard `approve` + `transferFrom` flows.
+
+### State
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `BRIDGE` | `address` (immutable) | The Bridge contract that deployed this token. Only `BRIDGE` may call `mint` or `burn`. |
+
+### Constructor
+
+```solidity
+constructor(
+    string memory name_,
+    string memory symbol_,
+    uint8 decimals_,
+    address bridge_
+)
+```
+
+Called internally by the Bridge when a foreign token is bridged for the first time. You never call this directly.
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `name_` | `string` | The ERC-20 `name` for this wrapped token, sourced from the original token's metadata (with a fallback of `"Unknown Token"` if the metadata call fails on the origin chain). |
+| `symbol_` | `string` | The ERC-20 `symbol`, sourced from the original token's metadata (fallback: `"UNKTKN"`). |
+| `decimals_` | `uint8` | The token's decimal precision, sourced from the original token's metadata (fallback: `18`). |
+| `bridge_` | `address` | The deploying Bridge contract. Stored as the immutable `BRIDGE`. All `mint` and `burn` calls are restricted to this address. |
+
+### Functions
+
+<details>
+<summary>mint — Mint wrapped tokens to a recipient</summary>
+
+`mint` creates new wrapped token units and assigns them to `to`. It is called by the Bridge whenever a foreign token arrives on this chain via `receiveTokens`. The total supply of a `WrappedToken` on any chain should at all times equal the amount of the original token locked or burned on the other side.
+
+**Who can call it:** Only the `BRIDGE` that deployed this contract.
+
+```solidity
+function mint(address to, uint256 amount) external onlyBridge
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `to` | `address` | The recipient address to receive the newly minted tokens. |
+| `amount` | `uint256` | The number of token units to mint (denominated in the token's own `decimals`). |
+
+#### Errors
+
+| Error | Condition |
+|-------|-----------|
+| `OnlyBridge` | `msg.sender` is not the `BRIDGE` address. |
+
+</details>
+
+<details>
+<summary>burn — Burn wrapped tokens from an address</summary>
+
+`burn` destroys wrapped token units from `from`'s balance. It is called by the Bridge during `bridgeTokens` when a holder returns wrapped tokens to their origin chain. No allowance from `from` is required — only the Bridge is permitted to call this function, and the Bridge handles the transfer-or-burn flow via `wrappedTokenInfo` reverse-lookup.
+
+**Who can call it:** Only the `BRIDGE` that deployed this contract.
+
+```solidity
+function burn(address from, uint256 amount) external onlyBridge
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `from` | `address` | The address whose wrapped token balance to reduce. |
+| `amount` | `uint256` | The number of token units to burn. Reverts if `from`'s balance is less than `amount` (standard ERC-20 underflow protection). |
+
+#### Errors
+
+| Error | Condition |
+|-------|-----------|
+| `OnlyBridge` | `msg.sender` is not the `BRIDGE` address. |
+| `ERC20InsufficientBalance` (OZ) | `from` does not hold sufficient balance. |
+
+</details>
+
+<details>
+<summary>decimals — Return the token's decimal precision</summary>
+
+`decimals` returns the number of decimal places for this token, as provided during deployment. Overrides the OpenZeppelin `ERC20` default of `18` so the wrapped token accurately mirrors the precision of its original counterpart.
+
+**Who can call it:** Anyone.
+
+```solidity
+function decimals() public view override returns (uint8)
+```
+
+#### Returns
+
+| Name | Type | Description |
+| --- | --- | --- |
+| — | `uint8` | The decimal precision stored at construction time. Mirrors the `decimals` value from the original token (or `18` if that call failed). |
+
+</details>
+
+### ERC-20 Standard Functions
+
+`WrappedToken` inherits the full OpenZeppelin `ERC20` and `ERC20Permit` API:
+
+| Function | Description |
+|----------|-------------|
+| `transfer(to, amount)` | Transfer tokens from `msg.sender` to `to`. |
+| `transferFrom(from, to, amount)` | Transfer tokens using an allowance. |
+| `approve(spender, amount)` | Approve `spender` to spend up to `amount`. |
+| `permit(owner, spender, value, deadline, v, r, s)` | EIP-2612 gasless approval via signature. |
+| `allowance(owner, spender)` | Query the remaining allowance. |
+| `balanceOf(account)` | Query a token balance. |
+| `totalSupply()` | Query the total token supply. |
+| `name()` | Returns the token name. |
+| `symbol()` | Returns the token symbol. |
+
+---
+
+## Cross-Chain Bridging Flow
+
+The following walk-through describes what happens when you bridge a token from Rollup A to Rollup B.
+
+**Step 1 — Outbound (Rollup A Bridge):**
+You call `bridgeTokens(tokenA, amount, rollupB_id, recipient)` on the Rollup A Bridge. The Bridge determines whether `tokenA` is native here or a wrapped foreign token, then locks or burns it. It constructs the `receiveTokens` calldata and sends it through the `CrossChainProxy` that represents the Rollup B Bridge address on Rollup A.
+
+**Step 2 — Proving:**
+The rollup's sequencer/prover observes the cross-chain proxy call and includes it in a batch. The prover constructs an `ExecutionEntry` that commits to calling `receiveTokens` on the Rollup B Bridge with the correct parameters, and posts the batch to `EEZ.postAndVerifyBatch` with a ZK proof.
+
+**Step 3 — Inbound (Rollup B Bridge):**
+During batch execution, the EEZ protocol calls through the `CrossChainProxy` that represents the Rollup A Bridge on Rollup B. The proxy forwards the call to `receiveTokens` on the Rollup B Bridge. Because `originalRollupId` (Rollup A) differs from Rollup B's `rollupId`, the Bridge mints a `WrappedToken` for the recipient (deploying it on first bridge).
+
+**Return trip:**
+When the holder bridges the `WrappedToken` back to Rollup A, `bridgeTokens` on the Rollup B Bridge detects via `wrappedTokenInfo` that the token is wrapped, burns it, and encodes the call to the Rollup A Bridge's `receiveTokens` with `originalRollupId` set to Rollup A's ID. On arrival, because `originalRollupId == rollupA.rollupId`, the Rollup A Bridge releases the original locked tokens.

@@ -8,7 +8,7 @@ This glossary is the single source of truth for EEZ terminology. When a term fir
 
 ## rollupId
 
-A `uint256` identifier assigned by the [`EEZ`](pathname:///contracts/eez) registry when a rollup calls `registerRollup`. Every cross-chain call, execution entry, state delta, and proxy identity is keyed by `rollupId`.
+A `uint256` identifier assigned by the [`EEZ`](/contracts/eez) registry when a rollup calls `registerRollup`. Every cross-chain call, execution entry, state delta, and proxy identity is keyed by `rollupId`.
 
 - **`rollupId == 0` is the mainnet sentinel** (`MAINNET_ROLLUP_ID`). L1 itself is always `0` in every cross-chain call hash computation. You **cannot** register a rollup with ID `0`, cannot create a [`CrossChainProxy`](#crosschainproxy) whose `originalRollupId` is `0`, and cannot construct an [`EEZL2`](pathname:///contracts/eezl2) with `_rollupId == 0` (constructor reverts `InvalidRollupId`).
 - **Registered rollup IDs start at `1`** and are assigned sequentially in the order rollups are registered.
@@ -50,7 +50,7 @@ Wrong return data, an extra call, a missing callback, or reordered operations al
 
 A lightweight CREATE2 contract that stands in for exactly one `(originalAddress, originalRollupId)` pair on the local chain. Every contract on every chain sees the same proxy address for the same remote identity, so `msg.sender`-based access control works across rollups just as it does same-chain.
 
-- Deployed by `createCrossChainProxy(originalAddress, originalRollupId)` on [`EEZ`](pathname:///contracts/eez) or [`EEZL2`](pathname:///contracts/eezl2); the address is fully deterministic and can be pre-computed with `computeCrossChainProxyAddress`.
+- Deployed by `createCrossChainProxy(originalAddress, originalRollupId)` on [`EEZ`](/contracts/eez) or [`EEZL2`](pathname:///contracts/eezl2); the address is fully deterministic and can be pre-computed with `computeCrossChainProxyAddress`.
 - Detects `STATICCALL` context via an EIP-1153 `tstore` self-call trick and routes to `staticCallLookup` instead of `executeCrossChainCall` when it is inside a read-only frame.
 - Cannot represent an address on its own chain — `originalRollupId == 0` on L1 or `originalRollupId == ROLLUP_ID` on L2 reverts `SameNetworkProxy`.
 
