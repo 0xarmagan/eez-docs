@@ -6,6 +6,7 @@ slug: /
 ---
 
 import UnauditedWarning from './_unaudited-warning.mdx'
+import ExecutionFlowDiagram from './_execution-flow-diagram.mdx'
 
 <UnauditedWarning />
 
@@ -14,6 +15,8 @@ Ethereum Economic Zone is a smart contract protocol for synchronous composabilit
 ## How it works, in brief
 
 A batch of [`ExecutionEntry`](/reference/glossary#executionentry) records — each committing to a full cross-rollup call including calls, returns, and state deltas — is posted to L1 via `postAndVerifyBatch` and verified by a per-rollup [multi-prover configuration](/concepts/multi-prover). Verified entries land in per-rollup queues as either [transient or deferred](/reference/glossary#transient-vs-deferred) work, and are consumed in the same L1 block through [`CrossChainProxy`](/concepts/cross-chain-proxy) contracts that preserve `msg.sender` identity across chains. Every entry carries a [`rollingHash`](/concepts/rolling-hash) that catches any deviation from the pre-committed execution.
+
+<ExecutionFlowDiagram />
 
 ## Who should use EEZ?
 

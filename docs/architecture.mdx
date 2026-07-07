@@ -4,6 +4,8 @@ sidebar_label: "Architecture"
 description: "Deep-dive into EEZ's L1 registry, L2 manager, CrossChainProxy identity, per-rollup execution queues, multi-prover verification, and rolling-hash integrity."
 ---
 
+import ExecutionFlowDiagram from './_execution-flow-diagram.mdx'
+
 EEZ is built around a two-sided contract architecture: a central L1 registry (`EEZ.sol`) that acts as the source of truth for rollup state and execution, and a lightweight L2 manager (`EEZL2.sol`) on each participating rollup that receives system-loaded execution tables. Bridging the two sides is the `CrossChainProxy` — a deterministic CREATE2 contract that gives each cross-chain address a stable on-chain identity. Shared base logic lives in `EEZBase.sol`, and per-rollup policy lives in individual `Rollup.sol` manager contracts deployed and owned by rollup operators. Understanding how these pieces interact is essential for both integrating with EEZ and reasoning about its security properties.
 
 ## Contract overview
@@ -136,6 +138,8 @@ The typical use case is a call that ran successfully on the destination chain bu
 ## Execution flow: a complete example
 
 The following describes what happens when `HelloWorldL1.helloL2World()` calls through a proxy to receive `"World"` from an L2 contract.
+
+<ExecutionFlowDiagram />
 
 1. The off-chain sequencer pre-computes the L2 execution trace, produces an `ExecutionEntry` committing to `returnData = abi.encode("World")` and the correct state root transition, and generates a proof.
 2. `postAndVerifyBatch` verifies the proof, marks rollup ID 1 as verified for the current block, and loads the entry into the persistent queue.

@@ -17,6 +17,11 @@ const config = {
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {
     v4: true, // Improve compatibility with the upcoming Docusaurus v4
+    // Keep disabled: the Rspack/SWC "faster" pipeline silently drops the
+    // Mermaid remark transform (diagrams fall back to plain code blocks
+    // with zero build warning). Re-verify with a real diagram before ever
+    // re-enabling.
+    faster: false,
   },
 
   // Set the production url of your site here
@@ -31,6 +36,11 @@ const config = {
   projectName: 'eez-docs', // Usually your repo name.
 
   onBrokenLinks: 'throw',
+
+  markdown: {
+    mermaid: true,
+  },
+  themes: ['@docusaurus/theme-mermaid'],
 
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you
@@ -73,6 +83,43 @@ const config = {
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
     ({
       image: 'img/eez-logo.png',
+      // EEZ brand indigo palette (matches src/css/custom.css). Mermaid's
+      // `options` (themeVariables) is shared across light/dark modes — a
+      // light-card look (light fills, dark indigo text/lines) reads well
+      // against both page backgrounds, so `base` is used for both.
+      mermaid: {
+        theme: {light: 'base', dark: 'base'},
+        options: {
+          themeVariables: {
+            primaryColor: '#E0E7FF',
+            primaryTextColor: '#312E81',
+            primaryBorderColor: '#6366F1',
+            lineColor: '#6366F1',
+            secondaryColor: '#C7D2FE',
+            tertiaryColor: '#EEF2FF',
+            actorBkg: '#E0E7FF',
+            actorBorder: '#6366F1',
+            actorTextColor: '#312E81',
+            actorLineColor: '#818CF8',
+            signalColor: '#4338CA',
+            signalTextColor: '#312E81',
+            labelBoxBkgColor: '#C7D2FE',
+            labelBoxBorderColor: '#6366F1',
+            labelTextColor: '#312E81',
+            noteBkgColor: '#EEF2FF',
+            noteBorderColor: '#818CF8',
+            noteTextColor: '#312E81',
+            loopTextColor: '#4338CA',
+            activationBkgColor: '#C7D2FE',
+            activationBorderColor: '#6366F1',
+            sequenceNumberColor: '#312E81',
+            fontFamily: 'inherit',
+            actorFontSize: '15px',
+            messageFontSize: '15px',
+            noteFontSize: '14px',
+          },
+        },
+      },
       colorMode: {
         respectPrefersColorScheme: true,
       },
