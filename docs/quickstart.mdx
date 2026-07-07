@@ -4,8 +4,6 @@ sidebar_label: "Quickstart"
 description: "Deploy EEZ on L1 and EEZL2 on L2 using Foundry and Anvil, register a rollup, post a batch, and execute your first cross-rollup call end-to-end."
 ---
 
-import ExecutionFlowDiagram from './_execution-flow-diagram.mdx'
-
 This guide walks you through deploying EEZ locally and running the `helloWorld` end-to-end scenario — a two-sided cross-rollup call where a contract on L1 calls `getWord()` on a contract on L2 and receives back the string `"World"` atomically in one L1 block. You'll use two local Anvil nodes to simulate L1 and L2, deploy all the necessary contracts, and drive the full execution flow.
 
 :::warning
@@ -220,9 +218,7 @@ This call atomically loads the L2 execution entry and drives `HelloWorldL2.getWo
 
 ## What just happened?
 
-Four things happened in sequence, spanning both chains:
-
-<ExecutionFlowDiagram />
+Four things happened in sequence, spanning both chains (see the [Architecture](/architecture) page for the full call-flow diagram):
 
 ### Off-chain pre-computation
 
