@@ -99,7 +99,7 @@ const config = {
             label: 'Contract Reference',
           },
           {
-            href: 'https://github.com/0xarmagan/eez-core-protocol',
+            href: 'https://github.com/eez-association/eez-core-protocol',
             label: 'GitHub',
             position: 'right',
           },
