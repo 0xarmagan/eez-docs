@@ -1,0 +1,146 @@
+---
+title: "Rolling Hash Integrity Across EEZ Execution Entries"
+sidebar_label: "Rolling Hash"
+description: "Discover how EEZ's rolling hash accumulates four tagged events to detect any tampering with call outcomes, nesting structure, or return data."
+---
+
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
+EEZ replays pre-computed execution off-chain — but how does the on-chain contract know the replay matches what the proof committed to? The answer is the rolling hash: a single `bytes32` accumulator that folds every call result and every reentrant frame boundary into one value. If anything diverges from the simulation — wrong return data, an extra call, a missing callback, even a single flipped bit — the final hash changes and the entry reverts.
+
+## What the Rolling Hash Is
+
+The rolling hash is a transient `bytes32` value that starts at zero at the beginning of each execution entry and gets updated at four points during execution. After all calls complete, EEZ checks that the accumulator matches the entry's committed hash and reverts the entire entry if it doesn't.
+
+The committed hash was computed during off-chain simulation and covered by the proof. Any deviation between the simulation and the on-chain replay changes the final accumulator value, so the check fails.
+
+Both the L1 and L2 managers share the same rolling-hash machinery.
+
+## The Four Tagged Events
+
+Every accumulator update fires at one of four points, each carrying a distinct tag so that different kinds of events can never produce colliding hashes:
+
+- **Call begin** — folded in _before_ each call is executed. Carries the 1-indexed global call number. Committing the call number up front is what prevents an attacker from reordering calls to produce a different outcome while preserving individual return values.
+- **Call end** — folded in _after_ each call returns. Carries the call number, a `success` boolean, and the **full** return-or-revert data. This is where wrong return data, a mismatched success flag, or truncated/padded output are caught.
+- **Nested begin** — folded in _before_ a reentrant callback frame starts, marking where in the flat call array the nested frame opens.
+- **Nested end** — folded in _after_ the reentrant frame finishes. The begin/end pair brackets every reentrant frame; any change to nesting depth (missing, extra, or mistimed callback) shifts the sequence and causes a mismatch.
+
+<details>
+<summary>For builders: exact tag constants, helpers, and error name</summary>
+
+The tag constants are protocol constants defined in `EEZBase`:
+
+```solidity
+// From src/base/EEZBase.sol
+uint8 constant CALL_BEGIN   = 1;
+uint8 constant CALL_END     = 2;
+uint8 constant NESTED_BEGIN = 3;
+uint8 constant NESTED_END   = 4;
+```
+
+Each event is folded into `_rollingHash` via one of four helpers:
+
+```solidity
+function _rollingHashCallBegin(uint256 callNumber) internal {
+    _rollingHash = keccak256(abi.encodePacked(_rollingHash, CALL_BEGIN, callNumber));
+}
+
+function _rollingHashCallEnd(uint256 callNumber, bool success, bytes memory retData) internal {
+    _rollingHash = keccak256(abi.encodePacked(_rollingHash, CALL_END, callNumber, success, retData));
+}
+
+function _rollingHashNestedBegin(uint256 nestedNumber) internal {
+    _rollingHash = keccak256(abi.encodePacked(_rollingHash, NESTED_BEGIN, nestedNumber));
+}
+
+function _rollingHashNestedEnd(uint256 nestedNumber) internal {
+    _rollingHash = keccak256(abi.encodePacked(_rollingHash, NESTED_END, nestedNumber));
+}
+```
+
+At the end of every entry, EEZ enforces:
+
+```solidity
+require(_rollingHash == entry.rollingHash);  // otherwise reverts RollingHashMismatch()
+```
+
+The domain tag bytes prevent an event of one kind from hashing identically to an event of another (e.g., a `CALL_END` for call #2 vs. a `NESTED_BEGIN` for frame #2).
+
+</details>
+
+## A Worked Example
+
+Consider an entry with three top-level calls, where the **first** call triggers a reentrant callback that processes two sub-calls:
+
+- Top-level frame: c0, c3, c4 (three iterations).
+- Reentrant frame (fires during c0): c1, c2 (two iterations).
+- Flat call array totals five: c0, c1, c2, c3, c4.
+
+The event sequence — and therefore the hash chain — looks like this: call-begin(c0) → nested-begin → call-begin(c1) → call-end(c1) → call-begin(c2) → call-end(c2) → nested-end → call-end(c0) → call-begin(c3) → call-end(c3) → call-begin(c4) → call-end(c4).
+
+Notice that call-end for c0 appears **after** the nested-end bracket, because the reentrant callback happens inside c0's execution. The hash captures the full nesting structure, not just the call order.
+
+<details>
+<summary>For builders: exact hash chain</summary>
+
+```text
+H0  = 0x0                                             (initial)
+H1  = keccak256(H0,  CALL_BEGIN,   callNum=1)         (c0 starts)
+H2  = keccak256(H1,  NESTED_BEGIN, nestedNum=1)       (reentrant fires during c0)
+H3  = keccak256(H2,  CALL_BEGIN,   callNum=2)         (c1 starts in reentrant frame)
+H4  = keccak256(H3,  CALL_END,     callNum=2, true, retData_1)
+H5  = keccak256(H4,  CALL_BEGIN,   callNum=3)         (c2 starts in reentrant frame)
+H6  = keccak256(H5,  CALL_END,     callNum=3, true, retData_2)
+H7  = keccak256(H6,  NESTED_END,   nestedNum=1)       (reentrant frame closes)
+H8  = keccak256(H7,  CALL_END,     callNum=1, true, retData_0)   (c0 returns)
+H9  = keccak256(H8,  CALL_BEGIN,   callNum=4)         (c3 starts)
+H10 = keccak256(H9,  CALL_END,     callNum=4, true, retData_3)
+H11 = keccak256(H10, CALL_BEGIN,   callNum=5)         (c4 starts)
+H12 = keccak256(H11, CALL_END,     callNum=5, true, retData_4)
+
+require(H12 == entry.rollingHash)                     // else RollingHashMismatch
+```
+
+Entry layout:
+
+```text
+entry.l2ToL1Calls         = [c0, c1, c2, c3, c4]
+entry.callCount           = 3
+entry.expectedL1ToL2Calls = [{ callCount: 2, returnData: 0xaa }]
+```
+
+</details>
+
+## How It Prevents Tampering
+
+The rolling hash makes three guarantees simultaneously:
+
+**Wrong return data**: If a call returns `0xdeadbeef` instead of the committed `0xabcdef`, `CALL_END` folds the actual `retData` into the accumulator. The hash diverges from `entry.rollingHash` immediately after that call and the entry reverts.
+
+**Wrong success flag**: If a call that was simulated as reverting unexpectedly succeeds (or vice versa), the `success` bool in `CALL_END` changes. The hash diverges.
+
+**Wrong nesting structure**: If a reentrant callback fires one step later than expected, the positions of `NESTED_BEGIN` and `CALL_END` swap in the sequence. Every subsequent hash step produces a different value.
+
+A hash-check failure is the terminal signal for all of these cases. It reverts the entire entry — not just the diverging call — preserving the atomicity guarantee.
+
+## Rolling Hash and `revertSpan`
+
+When a call is wrapped in a `revertSpan`, EEZ executes the calls inside the span normally — hashing call-begin and call-end for each — then unconditionally reverts the span's state changes via a self-call. The rolling hash from inside the span is carried back out through the revert payload, so the outer execution's rolling hash reflects that the spanned calls happened, even though the EVM rolled back their state effects.
+
+:::info
+The lookup sub-hash on `ExpectedLookup` and `LookupCall` structs uses a deliberately simpler, **untagged** formula — one keccak fold per static sub-call, verified against a separate `rollingHash` field on the lookup itself. This is distinct from the entry-level rolling hash: it serves a narrower purpose and is safe because the lookup's match key already pins the call context that the tagged events disambiguate at the entry level.
+:::
+
+## Troubleshooting a Mismatch
+
+If the on-chain execution diverges from what the proof committed to, the entry reverts with a rolling-hash mismatch. Common causes:
+
+- A destination contract's state has changed between proof generation and execution, causing it to return different data.
+- The batch was built against a different state root than what is currently committed on-chain.
+- A bug in the off-chain prover produced an incorrect committed hash.
+
+In all cases, the correct response is to re-simulate the execution against the current state and generate a new batch.
+
+> **For builders:** the exact revert is `error RollingHashMismatch()`, declared in `src/base/EEZBase.sol` and shared by both L1 and L2.

@@ -1,0 +1,126 @@
+---
+title: "EEZ Pre-Computed Cross-Rollup Execution Model Guide"
+sidebar_label: "Execution Model"
+description: "Understand how EEZ builds ExecutionEntry structs, partitions call counts, binds entries to state roots, and processes batches through postAndVerifyBatch."
+---
+
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
+EEZ's execution model inverts the normal on-chain programming model: rather than executing calls and discovering results, you pre-compute every result off-chain, commit to those results with a proof, and then replay the pre-approved execution deterministically on-chain. This section walks through the complete lifecycle — from building an `ExecutionEntry` off-chain, through submitting it in a batch, to consuming it in the same block.
+
+## Off-Chain Simulation by the Rollup Node
+
+Before any transaction reaches L1, the rollup node runs a complete simulation of the cross-chain interaction. It steps through every contract call across every involved chain, records the exact return data from each call, tracks every reentrant callback, and computes the `rollingHash` that will be verified on-chain. The simulation runs against specific state roots — the committed state of each rollup at a particular point in time.
+
+This simulation produces two kinds of outputs:
+
+- **`ExecutionEntry` structs**: the pre-computed call plan for each cross-chain interaction.
+- **ZK proofs** (or multi-prover attestations): cryptographic evidence that each `ExecutionEntry` correctly describes the state transition for its target rollup, given those specific pre-state roots.
+
+## The `ExecutionEntry`
+
+The [`ExecutionEntry`](pathname:///reference/glossary#executionentry) is the central pre-computed record for a single cross-chain interaction. Conceptually it holds four kinds of information:
+
+- **What state changes** — a list of pre-state → post-state transitions, one per rollup the entry touches, plus a signed ETH change for each.
+- **What calls run** — the exact sequence of top-level calls plus any reentrant callbacks, in a single flat array so on-chain execution never has to search or branch.
+- **What the calls return** — pre-computed return data for the top-level call, pre-recorded outcomes for reentrant callbacks, and pre-recorded outcomes for static-reads and reverting calls.
+- **How to check integrity** — an expected [`rollingHash`](pathname:///reference/glossary#rollinghash) that must match after every call has been replayed, plus a `proxyEntryHash` that routes the entry (immediate vs. proxy-triggered — see [transient vs. deferred](pathname:///reference/glossary#transient-vs-deferred)).
+
+If the live state root doesn't match the entry's expected pre-state, EEZ reverts. This is the protocol's safety backstop: even if a stale entry somehow makes it into the queue, it cannot corrupt state.
+
+<details>
+<summary>For builders: exact struct layout</summary>
+
+Full struct field listings, including every field's role and packing, live in [Data Types](pathname:///contracts/data-types). The core structs:
+
+```solidity
+// From src/interfaces/IEEZ.sol
+struct ExecutionEntry {
+    StateDelta[]           stateDeltas;          // pre-state → post-state for each touched rollup
+    bytes32                proxyEntryHash;       // bytes32(0) = immediate (L2TX), else action hash
+    uint256                destinationRollupId;  // routes this entry into the correct per-rollup queue
+    bytes                  returnData;           // pre-computed return value for the top-level call
+    L2ToL1Call[]           l2ToL1Calls;          // flat array of ALL calls, in execution order
+    ExpectedL1ToL2Call[]   expectedL1ToL2Calls;  // pre-computed results for reentrant callbacks
+    ExpectedLookup[]       expectedLookups;      // pre-computed results for static reads and reverting callbacks
+    uint256                callCount;            // how many calls the top-level frame processes
+    bytes32                rollingHash;          // expected final hash after all calls complete
+}
+
+struct L2ToL1Call {
+    bool    isStatic;
+    address targetAddress;
+    uint256 value;
+    bytes   data;
+    address sourceAddress;
+    uint256 sourceRollupId;
+    uint256 revertSpan;     // 0 = normal; N>0 = force-revert state effects of next N calls
+}
+
+struct StateDelta {
+    uint256 rollupId;
+    bytes32 currentState;   // checked against rollups[rollupId].stateRoot — mismatch reverts StateRootMismatch
+    bytes32 newState;
+    int256  etherDelta;
+}
+```
+
+`l2ToL1Calls[]` holds **all** calls — both the top-level calls and any reentrant callbacks — in a single flat array. `callCount` tells the protocol how many calls belong to the outermost frame; the rest are consumed by reentrant frames whose slice sizes are recorded in `expectedL1ToL2Calls[i].callCount`. See [Build Entries](pathname:///guides/build-execution-entries) for a step-by-step builder walkthrough.
+
+</details>
+
+## The Call Count Partition
+
+The flat call array is partitioned between the top-level execution frame and any reentrant frames. Suppose your entry has five calls. The top-level frame processes calls 0, 1, and 4. During call 1, the destination contract fires a reentrant callback (pre-recorded); that reentrant frame processes calls 2 and 3. The top-level count (3) plus every reentrant frame's count (2) must add up to the total (5).
+
+On-chain, a single monotonically-increasing cursor advances through the entire array — the same cursor for both top-level iterations and reentrant frames — and every call must be consumed before the entry finishes. EEZ never searches for the right call to execute; it just reads the next call at the cursor. This sequential, non-branching design means execution cost is predictable and there is no way for a reentrant call to "skip" or "replay" entries.
+
+<details>
+<summary>For builders: exact call-count invariant</summary>
+
+The invariant that must hold at the end of every entry is:
+
+```text
+entry.callCount + Σ expectedL1ToL2Calls[i].callCount == entry.l2ToL1Calls.length
+```
+
+Post-execution, EEZ enforces:
+
+```solidity
+require(_currentL2ToL1Call == entry.l2ToL1Calls.length);   // UnconsumedL2ToL1Calls
+require(_lastL1ToL2CallConsumed == entry.expectedL1ToL2Calls.length); // UnconsumedL1ToL2Calls
+```
+
+See [Build Entries](pathname:///guides/build-execution-entries) for the constructor walkthrough.
+
+</details>
+
+## Immediate vs. Deferred Entries
+
+An entry's `proxyEntryHash` field determines how it is consumed:
+
+- **Immediate** (`proxyEntryHash == bytes32(0)`): The entry represents a pure L2 transaction or a batch's built-in L1 work. `postAndVerifyBatch` executes these inline, before the meta hook fires. If an immediate entry reverts, EEZ emits `ImmediateEntrySkipped` and continues — it is not a hard error.
+- **Deferred** (`proxyEntryHash != bytes32(0)`): The entry is triggered by a proxy call. It sits in the per-rollup queue (or the transient stream) waiting for `executeCrossChainCall` or `executeL2TX` to consume it. The caller's proxy recomputes `crossChainCallHash` from the live call context; if it matches the entry's `proxyEntryHash`, the entry is consumed and executed.
+
+## What Happens at `postAndVerifyBatch`
+
+`postAndVerifyBatch` is the single entry point that loads a full batch onto L1. It verifies all proofs atomically, marks each rollup as verified for the current block, drains any leading transient entries inline (including a meta-hook callback on `msg.sender`), and publishes the remainder into per-rollup persistent queues. See [Post Batch](pathname:///guides/post-verify-batch) for the complete 8-step pipeline, struct fields, and error table.
+
+:::note
+The phrase "same block" is load-bearing. All entries posted in a `postAndVerifyBatch` call must be consumed before the block ends. Any unclaimed entry is overwritten when the next `postAndVerifyBatch` verifies the same rollup — or simply becomes unreachable because the `lastVerifiedBlock` guard will reject it in a future block.
+:::
+
+## Entry Consumption: `executeCrossChainCall` and `executeL2TX`
+
+Once entries are in the queue, they are consumed sequentially. When a user calls a cross-chain proxy on L1, the proxy routes to `executeCrossChainCall`. EEZ recomputes `crossChainCallHash` from the proxy's identity and the live call context, then looks up the next entry in the queue for that rollup:
+
+- If `entry.proxyEntryHash == crossChainCallHash`, the entry matches and EEZ proceeds to execute all calls in `l2ToL1Calls[]`, verify the rolling hash, apply the state deltas, and return `entry.returnData`.
+- If the hashes don't match, EEZ checks the lookup pool for a pre-recorded reverting call (`_tryRevertedTopLevelLookup`). If that also fails, it reverts `ExecutionNotFound`.
+
+`executeL2TX(rollupId)` is the permissionless entry point for immediate entries (`proxyEntryHash == 0`). It consumes the next entry in the rollup's queue that was posted as a pure L2 transaction.
+
+## L2-Side Execution
+
+On L2, the execution model is leaner: there are no state deltas, no per-rollup queue maps, and no transient/deferred split. The system address calls `loadExecutionTable` to atomically replace the execution table (or `executeIncomingCrossChainCall` for inbound calls from another rollup), and user transactions consume entries through `executeCrossChainCall` exactly as on L1. The same rolling hash mechanics apply — every call is hashed into `_rollingHash` and checked against `entry.rollingHash` at the end.

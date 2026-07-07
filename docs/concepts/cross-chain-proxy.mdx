@@ -1,0 +1,156 @@
+---
+title: "CrossChainProxy: Deterministic Cross-Rollup Identity"
+sidebar_label: "Cross-Chain Proxy"
+description: "Learn how EEZ's CREATE2 CrossChainProxy preserves msg.sender identity across rollups, routes calls to execution or lookup, and detects STATICCALL context."
+---
+
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
+When a contract on rollup A calls a contract on rollup B, EEZ needs to present a consistent `msg.sender` identity to the destination contract — one that represents the original caller on chain A, not some anonymous EEZ intermediary. The `CrossChainProxy` contract solves this problem: it is a lightweight, deterministically-addressed proxy that stands in for a specific `(address, rollupId)` pair on the target chain. Every contract on every chain gets the same proxy address for the same remote identity, making cross-chain calls as transparent as same-chain calls from the caller's perspective.
+
+## What a CrossChainProxy Is
+
+A `CrossChainProxy` is a minimal smart contract deployed via `CREATE2` by the EEZ manager (L1 `EEZ` or L2 `EEZL2`). Each proxy is permanently bound to one `(originalAddress, originalRollupId)` pair — the remote identity it stands in for — and to the manager that deployed it.
+
+When EEZ executes a cross-chain call on behalf of `sourceAddress` from `sourceRollupId`, it routes the execution through the proxy for that `(sourceAddress, sourceRollupId)` pair. The destination contract sees `msg.sender == proxyAddress` — a stable, predictable address that always maps to the same remote identity.
+
+The EEZ manager auto-creates a proxy the first time it encounters a new `(address, rollupId)` pair during execution (`_processNCalls` calls `_createCrossChainProxyInternal` if the proxy doesn't exist yet). You can also create proxies proactively via `createCrossChainProxy`.
+
+## Why the Proxy Exists: `msg.sender` Identity Across Chains
+
+Without the proxy, the destination contract would see `msg.sender == address(EEZ)` for every single cross-chain call, regardless of who the actual caller was. There would be no way to distinguish "Alice from rollup 1" from "Bob from rollup 2" — both would be the same `msg.sender`.
+
+The proxy gives each remote identity its own Ethereum address on the local chain. Contracts can use `msg.sender == proxyFor(Alice, rollupId)` for access control, reentrancy guards, or any other identity-sensitive logic — exactly as they would for same-chain calls. The proxy address is deterministic, so any contract can compute it without a registry lookup.
+
+## Deterministic Address Computation
+
+The proxy address is a `CREATE2` hash of three ingredients: the `(originalRollupId, originalAddress)` pair (as the salt), the `CrossChainProxy` bytecode, and the manager address (baked into the bytecode via constructor arguments). Any contract can compute the address offline without a registry lookup — just call `computeCrossChainProxyAddress(originalAddress, originalRollupId)` on the manager.
+
+Two properties follow. The address is **fully deterministic**: you can pre-compute and hard-code it before the proxy has ever been deployed. It is also **manager-scoped**: the same `(originalAddress, originalRollupId)` pair on two different manager deployments (or on L1 vs. L2) produces two different proxy addresses, so proxies from different EEZ deployments can never be confused.
+
+<details>
+<summary>For builders: exact CREATE2 formula</summary>
+
+```solidity
+// From src/base/EEZBase.sol
+function computeCrossChainProxyAddress(
+    address originalAddress,
+    uint256 originalRollupId
+) public view returns (address) {
+    bytes32 salt = keccak256(abi.encodePacked(originalRollupId, originalAddress));
+    bytes32 bytecodeHash = keccak256(
+        abi.encodePacked(
+            type(CrossChainProxy).creationCode,
+            abi.encode(address(this), originalAddress, originalRollupId)
+        )
+    );
+    return address(uint160(uint256(keccak256(abi.encodePacked(
+        bytes1(0xff),
+        address(this),   // deployer = the EEZ manager
+        salt,
+        bytecodeHash
+    )))));
+}
+```
+
+The `CREATE2` salt does not include `block.chainid`. The same `(originalAddress, originalRollupId)` pair produces the same address on any EEZ manager sharing the same bytecode. See [EEZ](pathname:///contracts/eez#computecrosschainproxyaddress) for the on-chain view function.
+
+</details>
+
+## Call Routing: Execute vs. Lookup
+
+When a contract calls a proxy (directly or through its `fallback` function), the proxy has to decide between two paths:
+
+- **Execute path** — used when the caller expects the cross-chain call to run and produce state changes. EEZ locates the matching [`ExecutionEntry`](pathname:///reference/glossary#executionentry) in the queue, runs the flat call array, verifies the [rolling hash](pathname:///reference/glossary#rollinghash), applies state deltas, and returns the pre-computed return data.
+- **Lookup path** — used when the caller is in a read-only context (e.g., a Solidity `view` function). EEZ looks up the pre-recorded result in the `expectedLookups` table (if inside an execution) or the lookup pool (if outside), verifies the lookup's sub-call hash, and returns the cached result. No state changes occur.
+
+The decision hinges on whether the current EVM frame is inside a `STATICCALL`. Since Solidity has no built-in way to introspect that, the proxy uses a clever detection trick described below.
+
+## STATICCALL Detection
+
+The proxy needs to know whether it is being called in a `STATICCALL` context so it can pick the right route. Solidity offers no direct primitive for this, so `CrossChainProxy` uses an **EIP-1153 transient-storage probe**:
+
+1. The proxy makes a plain `CALL` to itself, targeting a helper function that attempts a single `tstore`.
+2. `STATICCALL` restrictions propagate down the entire call stack — every frame invoked from inside a static context inherits the ban on state writes, even when reached via a regular `CALL`. EIP-1153 transient writes are treated as state writes for this purpose.
+3. If the outer context was a normal `CALL`, the `tstore` succeeds → route to the execute path.
+4. If the outer context was a `STATICCALL`, the inner `tstore` reverts → route to the lookup path.
+
+The probe is cheap (transient storage, no persistent `SSTORE`), non-destructive (the value written is discarded), and doesn't require any special opcode support beyond EIP-1153.
+
+<details>
+<summary>For builders: exact routing implementation</summary>
+
+Both the fallback router and the `tstore` probe live in `src/base/CrossChainProxy.sol`:
+
+```solidity
+function _fallback() internal {
+    (bool success,) = address(this).call(abi.encodeCall(this.staticCheck, ()));
+    bytes memory result;
+
+    if (!success) {
+        // STATICCALL context — resolve via the view function
+        (success, result) = EEZ.staticcall(
+            abi.encodeCall(IEEZ.staticCallLookup, (msg.sender, msg.data))
+        );
+    } else {
+        // Normal CALL context — execute the cross-chain call
+        (success, result) = EEZ.call{value: msg.value}(
+            abi.encodeCall(IEEZ.executeCrossChainCall, (msg.sender, msg.data))
+        );
+    }
+
+    if (success) {
+        result = abi.decode(result, (bytes));  // unwrap the inner bytes
+    }
+    // assembly return/revert
+}
+
+function staticCheck() external {
+    if (msg.sender == address(this)) {
+        _staticDetector = 0;  // attempt a tstore
+    } else {
+        _fallback();
+    }
+}
+```
+
+Both `executeCrossChainCall` and `staticCallLookup` return `bytes memory`; the low-level `.call()` re-encodes that as ABI, so the proxy strips one layer with `abi.decode(result, (bytes))` before returning to the original caller.
+
+The proxy also implements the OpenZeppelin `TransparentProxy` pattern on `executeOnBehalf`: when `msg.sender == EEZ` (the manager driving execution), the call is forwarded directly to the destination with assembly-level `return`/`revert` so that the destination's return data reaches the manager byte-for-byte unmodified — this is what keeps the rolling hash's `CALL_END` tag consistent between simulation and on-chain replay:
+
+```solidity
+function executeOnBehalf(address destination, bytes calldata data) external payable {
+    if (msg.sender == EEZ) {
+        (bool success, bytes memory result) = destination.call{value: msg.value}(data);
+        assembly {
+            switch success
+            case 0 { revert(add(result, 0x20), mload(result)) }
+            default { return(add(result, 0x20), mload(result)) }
+        }
+    } else {
+        _fallback();  // cross-chain path
+    }
+}
+```
+
+</details>
+
+## Creating and Using Proxies
+
+You can create a proxy for any remote address before it's needed:
+
+```solidity
+// Creates a proxy for 0xAlice on rollup 2; reverts if it already exists
+address proxy = eez.createCrossChainProxy(0xAlice, 2);
+
+// Compute the address without creating (works even if the proxy doesn't exist yet)
+address predicted = eez.computeCrossChainProxyAddress(0xAlice, 2);
+```
+
+EEZ auto-creates proxies during execution (the manager checks for code at the computed address and deploys if missing). For lookup sub-calls processed in a static context, however, proxies must already exist — deploying a contract is a state-mutating operation and cannot happen inside a `STATICCALL`. If a lookup needs a proxy that hasn't been deployed yet, the batch reverts.
+
+:::note
+A proxy always represents a **remote** identity. Creating a proxy for an address on the manager's own chain — `originalRollupId == 0` (`MAINNET_ROLLUP_ID`) on L1, or `originalRollupId == ROLLUP_ID` on L2 — reverts. See the [glossary](pathname:///reference/glossary#rollupid) for the `rollupId` numbering rules.
+:::

@@ -1,0 +1,130 @@
+---
+title: "Multi-Prover Architecture for EEZ Cross-Rollup Batches"
+sidebar_label: "Multi-Prover"
+description: "Explore how EEZ's per-rollup proof system configuration, M-of-N threshold enforcement, and atomic batch verification secure cross-rollup state transitions."
+---
+
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
+EEZ does not hard-code a single proof system. Instead, each rollup independently configures which proof systems it trusts, how many must agree for a batch to be accepted, and what verification keys those proof systems use. A single `postAndVerifyBatch` call can carry attestations from multiple independent proof systems — ZK verifiers, ECDSA multisigs, or any contract implementing the `IProofSystem` interface — and all proofs must pass atomically. This design lets each rollup choose its own security model without constraining the rest of the network.
+
+## What a Proof System Is
+
+A proof system in EEZ is any contract that can look at a batch's public-inputs commitment and answer "yes, this is valid" or "no, this is not." EEZ makes no assumption about the cryptographic scheme behind that answer. A ZK-based proof system runs a SNARK verifier; an ECDSA-based one checks m-of-n signatures from a trusted committee; a TEE-based one verifies an attestation report. Any of these — or combinations — can be configured per rollup.
+
+There is no central proof system registry. Each rollup's manager contract is the sole authority on which proof systems it accepts and which verification keys they use.
+
+<details>
+<summary>For builders: the IProofSystem interface</summary>
+
+Any contract that implements the following interface can be registered as a proof system:
+
+```solidity
+// From src/interfaces/IProofSystem.sol
+interface IProofSystem {
+    /// @notice Verifies a proof against a public inputs hash.
+    /// @param proof   The proof bytes (encoding is proof-system-specific).
+    /// @param publicInputsHash  A single bytes32 commitment to the batch's entries,
+    ///                          lookup calls, blobs, calldata, and per-rollup vkeys.
+    /// @return True if the proof is valid, reverts or returns false otherwise.
+    function verify(bytes calldata proof, bytes32 publicInputsHash) external view returns (bool);
+}
+```
+
+See [IProofSystem](pathname:///contracts/interfaces/iproofsystem) for the full contract-level reference, including the exact two-stage `publicInputsHash` construction.
+
+</details>
+
+## Per-Rollup Configuration
+
+Each rollup that registers with EEZ specifies an `IRollupContract`-conforming manager contract. All proof system configuration lives on this manager. The reference implementation in `src/rollupContract/Rollup.sol` exposes the following operations to the rollup owner:
+
+| Function | Purpose |
+| --- | --- |
+| `addProofSystem(address ps, bytes32 vkey)` | Add a proof system with its verification key |
+| `removeProofSystem(address ps)` | Remove a proof system |
+| `updateVerificationKey(address ps, bytes32 vkey)` | Update the vkey for an existing proof system |
+| `setThreshold(uint256 newThreshold)` | Set the minimum number of proof systems required per batch |
+
+This means two rollups in the same EEZ deployment can use completely different security models: one might require two independent ZK provers to agree, while another might use a single SNARK verifier during early development and later migrate to a more decentralized setup by raising the threshold and adding proof systems.
+
+## M-of-N Threshold Enforcement
+
+The threshold defines how many of the rollup's registered proof systems must attest to a batch for it to be accepted. If a rollup's threshold is 2, any `postAndVerifyBatch` batch that touches that rollup must include at least two proof systems that the rollup recognizes — and both must produce valid proofs.
+
+Threshold enforcement is handled entirely by the manager contract's `checkProofSystemsAndGetVkeys` function, which atomically validates subset membership, enforces the threshold, and returns the vkey list. EEZ calls it once per rollup per batch as a `STATICCALL` — see [IProofSystem](pathname:///contracts/interfaces/iproofsystem) for the interface definition and [IRollupContract](pathname:///contracts/interfaces/irollupcontract) for the manager contract expectations.
+
+:::note
+The central `EEZ` registry never reads the threshold separately. All threshold semantics live inside `checkProofSystemsAndGetVkeys`. This means a custom manager can implement any threshold model — including time-weighted quorums, governance-driven thresholds, or progressive decentralization schemes — without any changes to EEZ itself.
+:::
+
+## How `checkProofSystemsAndGetVkeys` Works in a Batch
+
+When you submit a batch via `postAndVerifyBatch`, you provide:
+
+- `proofSystems[]`: the batch-global list of proof system addresses, strictly ascending (no duplicates, no zero address).
+- `rollupIdsWithProofSystems[]`: for each rollup in the batch, the subset of `proofSystems[]` indices that rollup accepts, strictly ascending.
+- `proofs[]`: one proof per entry in `proofSystems[]`.
+
+EEZ iterates through `rollupIdsWithProofSystems[]` and calls each rollup's `checkProofSystemsAndGetVkeys` with the resolved subset of addresses. The returned vkeys are assembled into a matrix (`vkMatrix[rollup][proofSystemInSubset]`). A rollup that requires 2-of-3 proof systems can be covered by any 2 of those 3 systems being present in the batch — the rollup's manager decides which subsets are acceptable.
+
+## The Public Inputs Hash
+
+EEZ binds every proof to the complete batch content by constructing a `publicInputsHash` that each proof must verify against. Conceptually, this hash captures two things: a **shared commitment** to everything in the batch (entry hashes, lookup calls, blob hashes, calldata, and each rollup's L1-view context), and a **per-proof-system commitment** to the verification keys that proof system attests to for each rollup it participates in. A proof generated for one set of vkeys cannot be reused with a different set.
+
+<details>
+<summary>For builders: exact two-stage publicInputsHash construction</summary>
+
+**Stage 1 — shared across all proof systems:**
+
+```text
+customDataAcc = bytes32(0)
+for each rollup r (ascending by rollupId):
+    customDataAcc = keccak256(abi.encode(customDataAcc, rollupId_r, customData_r))
+
+sharedPublicInput = keccak256(abi.encodePacked(
+    abi.encode(entryHashes),         // keccak256(abi.encode(entry)) for each entry
+    abi.encode(lookupCallHashes),    // keccak256(abi.encode(lookup)) for each lookup call
+    abi.encode(blobHashes),          // EIP-4844 blob hashes
+    keccak256(callData),             // batch-scoped calldata
+    customDataAcc                    // folded per-rollup custom data
+))
+```
+
+`customData_r` is fetched from each rollup's manager via `getCustomData(batch.blockNumber)`. The reference implementation returns `abi.encode(timestamp, blockHash)`, binding the batch to a specific L1 block's context.
+
+**Stage 2 — per proof system:**
+
+```text
+for each proof system k:
+    acc_k = bytes32(0)
+    for each rollup r where k ∈ r's proofSystemIndex:
+        acc_k = keccak256(abi.encode(acc_k, rollupId_r, vkMatrix[r][j]))
+    publicInputsHash[k] = keccak256(abi.encodePacked(sharedPublicInput, acc_k))
+```
+
+See [IProofSystem](pathname:///contracts/interfaces/iproofsystem) for the canonical reference.
+
+</details>
+
+## Atomic Verification
+
+All proofs in a batch are verified atomically. If any single proof fails — whether due to an invalid ZK proof, a bad signature, or a `verify` function that returns `false` — the entire `postAndVerifyBatch` call reverts. No state changes are applied, no entries are queued, and no state roots are updated.
+
+:::info
+The `verify` calls are made as `view` calls (EEZ's interface marks them `external view`). The Solidity compiler emits `STATICCALL` for these, which means a malicious proof system contract cannot reenter `postAndVerifyBatch` to corrupt state — any `SSTORE` or `TSTORE` inside the verifier's call frame would revert at the EVM level.
+:::
+
+> **For builders:** the failure path is a plain `revert InvalidProof()` inside `_verifyProofSystemBatch` (see `src/EEZ.sol`).
+
+## Security Properties
+
+**Per-rollup isolation**: A compromised proof system for rollup A cannot affect rollup B's state. Each rollup's security domain is defined entirely by its own manager configuration.
+
+**No single point of failure**: A rollup with threshold 2 requires an attacker to compromise at least two independent proof systems simultaneously to forge a valid batch. The rollup owner can increase the threshold as the system matures.
+
+**Immutable manager binding**: Once a rollup is registered, its manager contract address is immutable. There is no `setRollupContract` function. To migrate to a new manager, you must register a new rollup ID. This prevents a social-engineering attack where an attacker tricks the registry into pointing a rollup at a malicious manager.
+
+**Atomic verification means no partial batches**: You cannot construct a batch that is valid for some rollups but invalid for others. Either every proof passes and every rollup's queue is populated, or the entire batch reverts. This all-or-nothing guarantee is what makes cross-rollup atomicity meaningful at the proof layer.

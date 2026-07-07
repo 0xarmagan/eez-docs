@@ -21,6 +21,17 @@ const sidebars = {
       label: 'Get Started',
       items: ['introduction', 'quickstart', 'architecture'],
     },
+    {
+      type: 'category',
+      label: 'Core Concepts',
+      items: [
+        'concepts/sync-composability',
+        'concepts/execution-model',
+        'concepts/rolling-hash',
+        'concepts/multi-prover',
+        'concepts/cross-chain-proxy',
+      ],
+    },
   ],
 };
 
