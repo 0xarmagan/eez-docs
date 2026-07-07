@@ -44,6 +44,11 @@ const sidebars = {
         'guides/lookup-calls',
       ],
     },
+    {
+      type: 'category',
+      label: 'Tools',
+      items: ['tools/trace-decoder', 'tools/visualizator'],
+    },
   ],
 };
 

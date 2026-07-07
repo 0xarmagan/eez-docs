@@ -1,0 +1,122 @@
+---
+title: "EEZ Visualizator: Cross-Chain Execution Web Dashboard"
+sidebar_label: "Visualizator"
+description: "Inspect EEZ cross-chain execution in a web dashboard — step through execution tables, transaction bundles, call correlations, and rollup state panels."
+---
+
+The EEZ Visualizator is a web dashboard for inspecting cross-chain execution flows step by step. Rather than reading raw execution tables in your terminal, the Visualizator presents the evolution of L1 and L2 execution queues side by side, highlights cross-chain call correlations as they are consumed, and lets you step through the entire execution plan at your own pace. It is the fastest way to build intuition for how EEZ batches work and to verify that a given transaction bundle matches your expectations.
+
+## Accessing the Visualizator
+
+The hosted version is always available at:
+
+**[https://visualizator-woad.vercel.app](https://visualizator-woad.vercel.app)**
+
+No installation is required. Open the URL in any modern browser to start exploring the built-in example scenarios.
+
+## What the Visualizator Shows
+
+The dashboard is organized around **scenarios** — pre-loaded examples of cross-chain execution patterns. Each scenario contains:
+
+### Execution Tables
+
+The main panel shows the L1 and L2 execution tables side by side. Each entry in the table displays:
+
+- **Entry index** — position in the queue.
+- **Proxy entry hash** — the `keccak256` identity of the cross-chain call (`proxyEntryHash` / `crossChainCallHash`).
+- **State delta** — the `currentState → newState` transition and `etherDelta` for this entry's rollup.
+- **Call count** — number of top-level cross-chain calls in the entry.
+- **Rolling hash** — the expected hash of the executed call sequence.
+- **Nested actions** — any `ExpectedL1ToL2Call` / `ExpectedOutgoingCrossChainCall` frames.
+
+Entries are color-coded: blue for L1, purple for L2. The currently active step is highlighted in teal, and consumed entries appear with a strikethrough.
+
+### Transaction Bundles (Step-by-Step View)
+
+The **Steps** panel lists the ordered sequence of cross-chain events across both chains. Each step has:
+
+- A chain badge (`L1` or `L2`) identifying where the event occurs.
+- A human-readable title describing the call (`bridgeTokens`, `receiveTokens`, `claimAndBridgeBack`, etc.).
+- A detail line showing which entries are added to or removed from the queue.
+- The state delta applied at this step.
+
+Click any step to jump to that point in the execution. The execution tables and state panels update to reflect the queue state at that exact moment.
+
+### Cross-Chain Call Correlations
+
+The **Flow Diagram** at the top of each scenario renders a node-and-arrow diagram of the cross-chain call graph. Each node represents a contract:
+
+- Solid blue border — L1 contract.
+- Solid purple border — L2 contract.
+- Dashed border — `CrossChainProxy` (gateway between chains).
+- Highlighted border — the contract involved in the current step.
+
+Arrows between nodes are labeled with the function name and carry a direction indicator. The diagram makes the proxy-to-original and original-to-proxy relationships immediately visible.
+
+### Rollup States
+
+Below the execution tables, the **State** panels show the current state root and ETH balance for each rollup at the selected step. The value is highlighted in green when it changes from the previous step, so you can see exactly which state transition each entry applies.
+
+## Built-In Scenarios
+
+The Visualizator ships with several built-in scenarios corresponding to the EEZ e2e test cases:
+
+| Scenario | Description |
+|---|---|
+| L1 → L2 simple call | A single entry bridging a call from L1 to an L2 counter |
+| L2 → L1 simple call | An L2 contract calling back to L1 |
+| Reentrant call | An L1 contract that receives a reentrant call from L2 mid-execution |
+| Multiple calls | An entry with several sequential cross-chain calls |
+| Revert and continue | A call that reverts with `revertSpan` isolation, execution continues |
+| Deep nested | Multi-level nesting across both chains |
+
+Select a scenario using the tabs at the top of the page.
+
+## Connecting to Custom RPC Endpoints
+
+The Visualizator in its current form works primarily with the built-in scenario data. For live network inspection, use the EEZ trace decoder CLI (see [Trace Decoder](/tools/trace-decoder)) to produce a unified execution diagram from real transaction traces.
+
+Future versions of the Visualizator will support connecting directly to L1 and L2 RPC endpoints for live block inspection.
+
+## Self-Hosting with Vite
+
+If you want to run the Visualizator locally or customize it, the project uses Vite for development and is deployable as a static site.
+
+## Step 1 — Navigate to the visualizator directory
+
+```bash
+cd visualizator
+```
+
+## Step 2 — Install dependencies
+
+```bash
+npm install
+```
+
+## Step 3 — Start the development server
+
+```bash
+npm run dev
+```
+
+Vite starts a local server (typically at `http://localhost:5173`). The dashboard hot-reloads on any change to the source files.
+
+## Step 4 — Build for production
+
+```bash
+npm run build
+```
+
+The built files land in `dist/`. Deploy them to any static hosting provider: Vercel, Netlify, GitHub Pages, or a plain CDN.
+
+## Interpreting the Execution Table Colors
+
+| Color / State | Meaning |
+|---|---|
+| Teal highlight | Entry just added to the queue at the current step |
+| Red strikethrough | Entry consumed (executed) at the current step |
+| Dim + strikethrough | Entry was consumed in a previous step |
+| Normal | Entry queued but not yet consumed |
+
+When an entry is consumed, its state delta is applied: the rollup's `stateRoot` advances from `currentState` to `newState`, and `etherBalance` is adjusted by `etherDelta`. You can confirm this by watching the state panels update in sync.

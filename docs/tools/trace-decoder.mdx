@@ -1,0 +1,184 @@
+---
+title: "EEZ Trace Decoder: Unified Cross-Chain Execution CLI"
+sidebar_label: "Trace Decoder"
+description: "Decode EEZ cross-chain transactions into a unified L1+L2 call diagram — Node.js CLI, usage flags, output format, and current limitations covered."
+---
+
+The EEZ trace decoder is a Node.js CLI tool that takes an Ethereum transaction hash and produces a unified cross-chain execution diagram by joining the L1 and L2 call traces. Instead of opening two separate block explorers and manually correlating execution paths, the decoder fetches both traces, identifies `CrossChainProxy` boundaries, matches L2 transactions to their L1 trigger, and renders the complete cross-chain call tree in a single annotated output.
+
+:::warning
+The trace decoder is **in-progress**. The deep walker logic — L1↔L2 hash matching, event decoding, and `postAndVerifyBatch` calldata parsing — does not yet fully reflect the current flat execution model. Treat this tool as a useful starting point and debugging aid, not a fully accurate cross-chain join.
+:::
+
+## Purpose
+
+When a transaction on L1 triggers cross-chain calls to an L2 (or vice versa), the execution spans two separate chains. The trace decoder:
+
+- **Detects which chain** the given transaction hash belongs to.
+- **Fetches the L1 call trace** using `debug_traceTransaction` with the `callTracer`.
+- **Identifies L2 block numbers** referenced in the batch (`postAndVerifyBatch` calldata, `BatchPosted` logs).
+- **Fetches L2 traces** for all `EEZL2` transactions in those blocks.
+- **Matches cross-chain boundaries** by correlating `CrossChainCallExecuted` and `IncomingCrossChainCallExecuted` events.
+- **Renders a unified tree** showing L1 and L2 execution interleaved at the `executeCrossChainCall` call sites.
+
+The decoder also performs three-tier ABI resolution for decoding function calls: local compiled artifacts (from `out/`), Blockscout APIs, and 4byte.directory. Environment variables containing `0x` addresses are auto-picked up as labels.
+
+## Prerequisites
+
+- **Node.js** v18 or later (uses native `fetch` and `AbortSignal.timeout`).
+- **ethers v6** — installed via `npm install` in the `trace-decoder/` directory.
+- Both your L1 and L2 RPC endpoints must support `debug_traceTransaction` with `callTracer`.
+- Optional: Blockscout-compatible explorer URLs for automatic ABI and label resolution.
+
+## Installation
+
+## Step 1 — Navigate to the trace-decoder directory
+
+```bash
+cd trace-decoder
+```
+
+## Step 2 — Install dependencies
+
+```bash
+npm install
+```
+
+This installs `ethers@6.16.0` as the only runtime dependency.
+
+## Step 3 — (Optional) Build the EEZ contracts for local ABI resolution
+
+If you have the EEZ contracts compiled, the decoder automatically loads ABIs from the `out/` directory:
+
+```bash
+forge build
+```
+
+Run the decoder from the project root to pick up local ABIs automatically. The decoder looks for `out/` relative to its working directory.
+
+## Usage
+
+```bash
+node decode-trace.mjs \
+  --tx <TRANSACTION_HASH> \
+  --l1-rpc <L1_RPC_URL> \
+  --l2-rpc <L2_RPC_URL> \
+  [--l1-explorer <BLOCKSCOUT_URL>] \
+  [--l2-explorer <BLOCKSCOUT_URL>] \
+  [--no-explorer] \
+  [--json]
+```
+
+### Required Flags
+
+| Flag | Description |
+|---|---|
+| `--tx <HASH>` | Transaction hash to decode (L1 or L2) |
+| `--l1-rpc <URL>` | L1 JSON-RPC endpoint (must support `debug_traceTransaction`) |
+| `--l2-rpc <URL>` | L2 JSON-RPC endpoint (must support `debug_traceTransaction`) |
+
+### Optional Flags
+
+| Flag | Description |
+|---|---|
+| `--l1-explorer <URL>` | Blockscout-compatible L1 explorer for ABI + contract name lookup |
+| `--l2-explorer <URL>` | Blockscout-compatible L2 explorer |
+| `--no-explorer` | Disable all Blockscout API calls (useful for private networks) |
+| `--json` | Emit the unified execution tree as structured JSON instead of the box-drawing diagram |
+
+### Examples
+
+Decode an L1 transaction with explorer-based labeling:
+
+```bash
+node decode-trace.mjs \
+  --tx 0xabc123... \
+  --l1-rpc http://localhost:8545 \
+  --l2-rpc http://localhost:8546
+```
+
+Decode without any external API calls (air-gapped or private network):
+
+```bash
+node decode-trace.mjs \
+  --tx 0xabc123... \
+  --l1-rpc http://localhost:8545 \
+  --l2-rpc http://localhost:8546 \
+  --no-explorer
+```
+
+Point at custom explorer instances:
+
+```bash
+node decode-trace.mjs \
+  --tx 0xabc123... \
+  --l1-rpc $L1_RPC \
+  --l2-rpc $L2_RPC \
+  --l1-explorer https://explorer.my-l1.example.com \
+  --l2-explorer https://explorer.my-l2.example.com
+```
+
+Output the result as JSON for programmatic consumption:
+
+```bash
+node decode-trace.mjs \
+  --tx 0xabc123... \
+  --l1-rpc $L1_RPC \
+  --l2-rpc $L2_RPC \
+  --json
+```
+
+### Environment Variable Labels
+
+Any environment variable whose value is a `0x`-prefixed Ethereum address is automatically registered as a label. For example:
+
+```bash
+export EEZ_CONTRACT=0x1234...
+export MANAGER_L2=0xabcd...
+node decode-trace.mjs --tx $TX_HASH --l1-rpc $L1_RPC --l2-rpc $L2_RPC
+```
+
+The EEZ and EEZL2 contracts are also auto-discovered by detecting which contract receives `executeCrossChainCall` / `loadExecutionTable` / `postAndVerifyBatch` calls in the trace.
+
+## Output
+
+The decoder renders a box-drawing tree to standard output. Here is the general shape of a unified L1→L2 execution:
+
+```
+┌─── Cross-Chain Execution ✓ ────────────────────────────────
+│
+│ L1 ✓ EEZ::postAndVerifyBatch()
+│ L1 ├── ✓ FlashLoanBridgeExecutor::execute()
+│ L1 │   ├── ✓ FlashLoan::flashLoan()
+│ L1 │   │   └── ✓ proxy[Bridge@rollup1]::bridgeTokens()
+│ L1 │   │          ═════════════ L2 ═════════════════════
+│ L2 │   │          → proxy[Bridge@rollup0] → Bridge::receiveTokens()
+│ L1 │   │          ═════════════════════════════════════
+│ L1 │   └── ✓ proxy[ExecutorL2@rollup1]::claimAndBridgeBack()
+│              ═════════════ L2 ═════════════════════
+│ L2           → ExecutorL2::claimAndBridgeBack()
+│ L2               ├── ✓ FlashLoanersNFT::claim()
+│ L2               └── ✓ Bridge::bridgeTokens()
+│              ═════════════════════════════════════
+│
+│ Events:
+│   L1  TokensBridged(token: 0x..., amount: 10000...)
+│   L2  WrappedTokensMinted(wrappedToken: 0x..., to: 0x...)
+│   L2  WrappedTokensBurned(...)
+│   L1  TokensReleased(token: 0x..., to: 0x...)
+│
+└────────────────────────────────────────────────────────────
+```
+
+For each call node, the decoder shows:
+
+- **Chain tag** — `L1` or `L2`.
+- **Contract label** — resolved from local ABIs, Blockscout, environment variables, or raw address.
+- **Function name** — decoded from the function selector; falls back to raw selector if unknown.
+- **Return value** — decoded where possible (strings, `uint256`, `bool`).
+- **Revert marker** — `✗` with the revert message if the call failed.
+- **Events** — all decoded events from both chains, listed at the bottom.
+
+`CrossChainProxy` calls are displayed as `proxy[Target@rollupN]::functionName()` to make the cross-chain boundary visually distinct from regular L1/L2 calls.
+
+Pass `--json` to receive the same information as a structured JSON object, suitable for piping into other tools or building custom visualizations on top of the trace data.
