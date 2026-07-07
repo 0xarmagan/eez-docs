@@ -1,0 +1,198 @@
+---
+title: "Cross-Rollup Flash Loans Using EEZ Synchronous Composability"
+sidebar_label: "Flash Loans"
+description: "Learn how EEZ enables atomic cross-rollup flash loans — borrow on L1, use funds on L2, and repay on L1, all within a single Ethereum block."
+---
+
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
+EEZ's synchronous composability makes cross-rollup flash loans possible in a way that is fundamentally different from conventional bridge-and-wait patterns. Because EEZ batches state transitions for multiple rollups into a single L1 block and delivers cross-chain calls atomically, you can borrow tokens on L1, bridge them to L2 to perform some action (such as claiming a token-gated NFT), bring them back, and repay the flash loan — all within the same Ethereum block, as if the two chains were a single execution environment.
+
+## The Core Concept
+
+A conventional flash loan is atomic because the entire borrow-use-repay cycle happens within one EVM transaction. A cross-rollup flash loan requires the borrowed funds to travel to another chain and back. EEZ makes this atomic by:
+
+1. **Pre-committing the full execution plan** — the prover computes all state transitions (L1 locks, L2 mints, L2 burns, L1 unlocks) off-chain before the L1 batch is submitted.
+2. **Delivering cross-chain calls synchronously** — within `postAndVerifyBatch`, EEZ walks the execution entries and fires cross-chain calls in order. Each call resolves before the next one starts.
+3. **Enforcing accounting at the batch level** — EEZ's `etherDelta` in `StateDelta` ensures that ETH moved cross-chain is always accounted for. For ERC20s, the Bridge's lock-and-mint guarantees that tokens cannot be double-spent.
+
+The result: a smart contract on L1 can borrow tokens, instruct the EEZ Bridge to send them to L2, wait for an L2 contract to act on them, and receive the tokens back — all before the L1 transaction finalizes.
+
+## How EEZ Enables This
+
+### The Reentrant Cross-Chain Call Pattern
+
+Cross-chain calls in EEZ are **reentrant by design**. When an L1 contract calls a `CrossChainProxy` targeting an L2 contract, EEZ's `executeCrossChainCall` immediately invokes the destination (on L2 in the same block). If that L2 contract in turn calls back to L1 — for instance, to bridge tokens back — EEZ handles the inbound L1 call as part of the same top-level execution entry's nested frame (`ExpectedL1ToL2Call`).
+
+This reentrant pattern is what the flash loan executor uses:
+
+```text
+L1: FlashLoanBridgeExecutor.onFlashLoan()
+  → bridge_l1.bridgeTokens(...)              // L1→L2 call via CrossChainProxy
+    └── L2: bridge_l2.receiveTokens(...)     // tokens arrive on L2 as WrappedToken
+  → executorL2Proxy.claimAndBridgeBack(...)  // L1→L2 call: use the tokens
+    └── L2: executorL2.claimAndBridgeBack()
+          → FlashLoanersNFT.claim()          // token-gated action on L2
+          → bridge_l2.bridgeTokens(...)      // L2→L1 call via CrossChainProxy
+            └── L1: bridge_l1.receiveTokens() // tokens arrive back on L1
+  → IERC20(token).transfer(flashLoanPool, amount)  // repay
+```
+
+This entire call tree executes within the scope of the `FlashLoan.flashLoan` call on L1, satisfying the flash loan's invariant check (`balanceAfter >= balanceBefore`) at the end.
+
+### revertSpan for Conditional Rollbacks
+
+Each `L2ToL1Call` carries a `revertSpan` field (see [Build Entries](/guides/build-execution-entries#l2tol1call) for the full struct). When `revertSpan > 0`, EEZ wraps the next `revertSpan` calls in an isolated revert context — if any call in the span reverts, only that span rolls back rather than the entire batch. This lets you build conditional cross-chain logic and handle failure gracefully.
+
+### The ETH Accounting Invariant (etherDelta)
+
+Every execution entry carries a `StateDelta` array whose `etherDelta` field records the **net ETH change for each rollup** caused by the entry (see [Build Entries](/guides/build-execution-entries#statedelta-l1-only) for the full struct). EEZ enforces accounting by checking that ETH flowing into and out of each rollup balances across all entries in a batch. For ERC20 flash loans, `etherDelta` is zero — only the bridge's lock-and-mint invariant applies.
+
+## Worked Example: The Flash Loan Test
+
+The `script/flash-loan-test/` directory contains a full end-to-end demonstration. Here is how the execution is orchestrated across three sequential entries.
+
+### Contracts Involved
+
+| Contract | Chain | Role |
+| --- | --- | --- |
+| `FlashLoan` | L1 | Flash loan pool — holds the native ERC20 tokens |
+| `FlashLoanBridgeExecutor` (L1) | L1 | Orchestrates the full flow; implements `IFlashLoanReceiver` |
+| `Bridge` (L1) | L1 | Locks/releases ERC20 tokens on L1 |
+| `FlashLoanBridgeExecutor` (L2) | L2 | Claims NFT and bridges tokens back |
+| `Bridge` (L2) | L2 | Mints/burns `WrappedToken` on L2 |
+| `FlashLoanersNFT` | L2 | Token-gated NFT — requires ≥10,000 tokens to claim |
+
+### Phase 1: Load the L2 Execution Table
+
+Before the L1 transaction, the L2 execution table is loaded with three entries describing the expected L2-side state transitions:
+
+```solidity
+// Entry 0: bridge_l2.receiveTokens(...) — tokens land on L2
+// Entry 1: executorL2.claimAndBridgeBack(...) — NFT claimed, tokens bridge back
+// Entry 2: bridge_l1.receiveTokens(...) — the return leg (consumed on L1, recorded on L2)
+
+manager.loadExecutionTable(l2Entries, noLookupCalls);
+```
+
+### Phase 2: The L1 Batch (same block)
+
+The `FlashLoanBatcher` contract posts the L1 execution entries and triggers the executor in a single transaction, followed by a call to `executeL2TX` for Entry 2:
+
+```solidity
+// 3 L1 entries:
+// Entry 0: forward bridge call (bridgeTokens → bridge_l2.receiveTokens)
+// Entry 1: claimAndBridgeBack — has 1 nested ExpectedL1ToL2Call for the return bridge
+// Entry 2: L2TX — final state update (proxyEntryHash == 0)
+
+rollups.postAndVerifyBatch(batch);
+executor.execute();         // triggers flashLoanPool.flashLoan → onFlashLoan → ...
+rollups.executeL2TX(L2_ROLLUP_ID); // consumes Entry 2 (proxyEntryHash == 0)
+```
+
+The `onFlashLoan` callback in `FlashLoanBridgeExecutor` performs three steps:
+
+```solidity
+function onFlashLoan(address _token, uint256 amount) external override {
+    // Step 1: Bridge tokens to executor on L2
+    IERC20(_token).approve(address(bridge), amount);
+    bridge.bridgeTokens(_token, amount, l2RollupId, executorL2);
+
+    // Step 2: Tell executor on L2 to claim NFT and bridge tokens back
+    (bool success,) = executorL2Proxy.call(
+        abi.encodeCall(this.claimAndBridgeBack,
+            (wrappedTokenL2, nftL2, bridgeL2, 0, address(this)))
+    );
+    require(success, "Cross-chain call failed");
+
+    // Step 3: Repay — tokens are back thanks to the synchronous bridge return
+    IERC20(_token).safeTransfer(msg.sender, amount);
+}
+```
+
+Step 1 calls `bridge.bridgeTokens`, which routes through a `CrossChainProxy` to `bridge_l2.receiveTokens`. EEZ consumes Entry 0 and mints 10,000 `WrappedToken` units to `executorL2` on L2.
+
+Step 2 calls `executorL2Proxy`, which routes to `executorL2.claimAndBridgeBack`. EEZ consumes Entry 1. Inside that call, `executorL2` claims the NFT (it now holds ≥10,000 wrapped tokens) and calls `bridge_l2.bridgeTokens` to send the tokens back. This fires the nested L1→L2 return call (`ExpectedL1ToL2Call`), consuming the Bridge's `receiveTokens` entry on L1 — which releases the native tokens back to the L1 executor.
+
+Step 3 finds the tokens back in the executor's balance and transfers them to the flash loan pool. The invariant `balanceAfter >= balanceBefore` is satisfied.
+
+### Entry 1 Rolling Hash
+
+Entry 1 has a non-trivial `rollingHash` because it involves a nested frame. The hash is computed as:
+
+```solidity
+// Nested frame #1 opened (nestedNumber = 1)
+h = keccak256(abi.encodePacked(h, NESTED_BEGIN, uint256(1)));
+// No top-level calls inside the nested frame (they are in ExpectedL1ToL2Calls)
+h = keccak256(abi.encodePacked(h, NESTED_END, uint256(1)));
+```
+
+The rolling hash captures the exact sequence of cross-chain call events, making the execution entry tamper-evident. Any deviation from the pre-committed plan (wrong call order, unexpected reentrant calls) causes the batch to revert.
+
+### Running the E2E Test Locally
+
+## Step 1 — Start two local Anvil nodes
+
+```bash
+anvil --port 8545 &   # L1
+anvil --port 8546 &   # L2
+```
+
+## Step 2 — Run the full e2e script
+
+From the project root, the `e2e.sh` script deploys everything, loads the L2 table, executes the L1 batch, and decodes the resulting execution logs:
+
+```bash
+bash script/flash-loan-test/e2e.sh
+```
+
+The script deploys EEZ on L1, EEZL2 on L2, deploys Bridge contracts on both chains with a shared CREATE2 salt, deploys the flash loan pool and executor contracts, and then executes the full flash loan flow.
+
+## Step 3 — Deploy contracts manually (network mode)
+
+For a persistent testnet, deploy each component separately:
+
+```bash
+bash script/flash-loan-test/deploy.sh \
+  --l1-rpc $L1_RPC \
+  --l2-rpc $L2_RPC \
+  --pk $PK \
+  --rollups $ROLLUPS \
+  --manager-l2 $MANAGER_L2 \
+  --l2-rollup-id $L2_ROLLUP_ID
+```
+
+The script outputs all deployed addresses. Save them — you will need them for the execute phase.
+
+## Step 4 — Load the L2 execution table
+
+Run `ExecuteFlashLoanL2` against the L2 RPC to pre-load the L2 execution table:
+
+```bash
+forge script script/flash-loan-test/ExecuteFlashLoan.s.sol:ExecuteFlashLoanL2 \
+  --rpc-url $L2_RPC --broadcast --private-key $PK \
+  --sig "run(address,address,address,address,address,address,address,address,string,string,uint8)" \
+  $MANAGER_L2 $BRIDGE_L1 $BRIDGE_L2 $EXECUTOR_L1 $EXECUTOR_L2 \
+  $FLASH_LOANERS_NFT $TOKEN $WRAPPED_TOKEN_L2 "Test Token" "TT" 18
+```
+
+## Step 5 — Execute the L1 flash loan (same block as batch post)
+
+```bash
+forge script script/flash-loan-test/ExecuteFlashLoan.s.sol:ExecuteFlashLoanL1 \
+  --rpc-url $L1_RPC --broadcast --private-key $PK \
+  --sig "run(address,address,address,address,address,address,address,address,address)" \
+  $ROLLUPS $PROOF_SYSTEM $BRIDGE_L1 $BRIDGE_L2 $EXECUTOR_L1 $EXECUTOR_L2 \
+  $FLASH_LOANERS_NFT $TOKEN $WRAPPED_TOKEN_L2
+```
+
+`postAndVerifyBatch` and `executor.execute()` are bundled into a single `FlashLoanBatcher` transaction so both happen in the same L1 block. After this call, the flash loan pool's token balance is unchanged, `executorL2` holds a `FlashLoanersNFT` on L2, and the full cross-chain cycle has completed atomically.
+
+## Key Takeaways
+
+- **Same-block atomicity** — the entire borrow-bridge-use-bridge-back-repay cycle fits within one L1 block because EEZ processes L1 and L2 state transitions together in `postAndVerifyBatch`.
+- **Pre-committed execution plan** — both L1 and L2 entries must be posted before the flash loan executes. The prover computes the full plan off-chain; the on-chain machinery just verifies and executes it.
+- **Reentrant L2→L1 calls** — `ExpectedL1ToL2Call` entries in the L1 execution table capture calls that originate on L2 and land on L1 mid-execution. These are the mechanism that brings tokens back before the flash loan callback returns.
+- **No trusted intermediary** — the ZK proof in `postAndVerifyBatch` attests to the validity of the L2 state transitions. The L1 execution machinery enforces correctness of the on-chain call sequence via rolling hash.

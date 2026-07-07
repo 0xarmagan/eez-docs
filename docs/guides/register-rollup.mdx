@@ -1,0 +1,75 @@
+---
+title: "Register Your Rollup with the EEZ Protocol Registry"
+sidebar_label: "Register Rollup"
+description: "Deploy a Rollup manager contract, configure proof systems and threshold, then register your rollup with the EEZ registry to enable cross-rollup execution."
+---
+
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
+Registering is a one-time bootstrap step for rollup operators. If you run a based rollup and want its state to be visible to — and callable from — other rollups in the EEZ network, you need to register once on L1 so the central `EEZ` registry can track your state root, own your deferred execution queue, and route cross-chain calls to your rollup. DApp developers and end users do **not** register; they interact with rollups that are already registered. Plan for the registration transaction to be issued by the same party that will operate your proof-system configuration long-term, since the manager you register controls thresholds and verification keys forever after.
+
+Before your rollup can participate in EEZ's cross-chain execution model, you must register it with the central `EEZ` registry contract on L1. Registration is permissionless — anyone can deploy a manager and register it — but you need to wire together three components: a `Rollup.sol` manager contract that holds your proof system configuration, a call to `EEZ.registerRollup` that records your manager in the central registry, and a one-shot callback that writes your assigned `rollupId` back to your manager. Once registered, the registry tracks your rollup's state root and deferred execution queue under that `rollupId`.
+
+## Prerequisites
+
+- An Ethereum L1 node or testnet RPC endpoint
+- At least one deployed `IProofSystem`-conforming verifier contract address
+- A verification key (`bytes32`) for each proof system you plan to allow
+- The address of the deployed `EEZ` registry contract
+
+---
+
+## Steps
+
+---
+
+## Managing your rollup after registration
+
+### Updating the threshold
+
+Change the minimum required proof systems per batch at any time:
+
+```solidity
+function setThreshold(uint256 newThreshold) external onlyOwner
+```
+
+```solidity
+rollup.setThreshold(2); // now require 2-of-N proof systems per batch
+```
+
+Setting the threshold above your current proof system count locks the rollup — no batch can satisfy `checkProofSystemsAndGetVkeys` until you either add more proof systems or lower the threshold. This is intentional: you can use it as an emergency brake.
+
+### Emergency state root override
+
+If you need to set the state root outside of a normal batch cycle, use the owner escape hatch:
+
+```solidity
+function setStateRoot(bytes32 newStateRoot) external onlyOwner
+```
+
+```solidity
+rollup.setStateRoot(newStateRoot);
+// internally calls: IEEZRegistry(ROLLUPS).setStateRoot(rollupId, newStateRoot)
+```
+
+The registry enforces a same-block lockout: if `lastVerifiedBlock(rollupId) == block.number`, the call reverts with `RollupBatchActiveThisBlock`. You can only use the escape hatch in blocks where no verified batch has touched your rollup.
+
+### Ownership transfer
+
+Transfer control of the manager to a new address using the standard OpenZeppelin `Ownable` interface:
+
+```solidity
+rollup.transferOwnership(newOwner);
+```
+
+The `rollupContract` pointer in the EEZ registry is immutable after registration. Transferring ownership of your `Rollup.sol` does not change what the registry stores — the new owner simply gains control of `addProofSystem`, `removeProofSystem`, `updateVerificationKey`, `setThreshold`, and `setStateRoot` on that same contract.
+
+---
+
+## Key addresses and IDs
+
+See [`rollupId`](pathname:///reference/glossary#rollupid) in the glossary for the full definition, including the `MAINNET_ROLLUP_ID = 0` sentinel and immutability rules.
+
+Your `rollupId` is the single identifier you pass everywhere: `destinationRollupId` in execution entries, the rollup ID argument to `executeL2TX`, and the ID forwarded in cross-chain call hashes. Keep it accessible — your builder node needs it at batch construction time. In your manager's storage, a `rollupId` of `0` doubles as the "not yet registered" sentinel — never use it as a live rollup identifier before the registration callback fires.

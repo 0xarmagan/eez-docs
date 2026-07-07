@@ -32,6 +32,18 @@ const sidebars = {
         'concepts/cross-chain-proxy',
       ],
     },
+    {
+      type: 'category',
+      label: 'Guides',
+      items: [
+        'guides/register-rollup',
+        'guides/build-execution-entries',
+        'guides/post-verify-batch',
+        'guides/bridge-tokens',
+        'guides/flash-loans',
+        'guides/lookup-calls',
+      ],
+    },
   ],
 };
 

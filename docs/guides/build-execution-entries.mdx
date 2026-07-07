@@ -1,0 +1,443 @@
+---
+title: "Build ExecutionEntry Structs for EEZ Cross-Chain Batches"
+sidebar_label: "Build Entries"
+description: "Construct ExecutionEntry structs — including crossChainCallHash, rollingHash, and the E2EHelpers utilities — for EEZ cross-chain batch submissions."
+---
+
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
+Every cross-chain interaction in EEZ is described by an `ExecutionEntry` struct that you — or your builder node — construct off-chain before posting a batch. An entry is a pre-simulated, proof-bound record of a cross-chain call: it declares what calls will execute, in what order, with what return data, and produces a single `rollingHash` that the on-chain protocol verifies after execution completes. Building entries correctly means simulating the full execution graph in advance, recording every call result and every nesting boundary, and encoding that simulation as the flat arrays and hash the contract expects.
+
+## The `ExecutionEntry` struct
+
+The L1 and L2 execution structs share the same conceptual shape but have different field sets. On L1, entries carry state root deltas and routing information that L2 entries omit.
+
+### L1 entry (`IEEZ.sol`)
+
+```solidity
+struct ExecutionEntry {
+    // State root deltas applied when this entry is consumed.
+    // Every entry must carry at least one StateDelta — the prover asserts
+    // stateDeltas.length >= 1. An empty array leaves the entry unpinned
+    // from any rollup trajectory (no StateRootMismatch backstop).
+    StateDelta[] stateDeltas;
+
+    // bytes32(0) = immediate entry (L2TX / inline-executed by postAndVerifyBatch).
+    // Non-zero = deferred entry, consumed by executeCrossChainCall or executeL2TX
+    // when the live call hash matches this value.
+    bytes32 proxyEntryHash;
+
+    // Which rollup's queue this entry routes to in the per-rollup queue model.
+    uint256 destinationRollupId;
+
+    // Pre-computed return data returned by executeCrossChainCall at the top level.
+    bytes returnData;
+
+    // Flat array of ALL calls this entry will execute, in execution order.
+    // Includes both entry-level (top-level frame) calls and all calls
+    // executed inside reentrant frames. Partitioned by callCount and
+    // expectedL1ToL2Calls[i].callCount — see callCount below.
+    L2ToL1Call[] l2ToL1Calls;
+
+    // Pre-computed results for successful reentrant (L1→L2) calls.
+    // Consumed sequentially when executeCrossChainCall detects _insideExecution().
+    ExpectedL1ToL2Call[] expectedL1ToL2Calls;
+
+    // Entry-scoped nested lookups: reentrant STATICCALLs and try/catch'd
+    // reverting reentrant calls. Matched by a 4-tuple key at resolution time.
+    ExpectedLookup[] expectedLookups;
+
+    // Number of calls the TOP-LEVEL frame processes from l2ToL1Calls[].
+    // Together with expectedL1ToL2Calls[i].callCount, must satisfy:
+    //   callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length
+    uint256 callCount;
+
+    // Expected rolling hash after all calls and nestings complete.
+    // On-chain checked: if (_rollingHash != entry.rollingHash) revert RollingHashMismatch()
+    bytes32 rollingHash;
+}
+```
+
+### L2 entry (`IEEZL2.sol`)
+
+The L2 struct is deliberately leaner. It has no `stateDeltas` (L2 has no state root tracking), no `destinationRollupId` (a single rollup), and uses self-relative directional names because the counterparty can be L1 or another L2:
+
+```solidity
+struct ExecutionEntry {
+    // Hash of the inbound call — never bytes32(0) on L2.
+    bytes32 proxyEntryHash;
+
+    // All calls this entry executes, flat, in execution order.
+    CrossChainCall[] incomingCalls;
+
+    // Pre-computed results for successful reentrant outgoing calls.
+    ExpectedOutgoingCrossChainCall[] expectedOutgoingCalls;
+
+    // Entry-scoped nested lookups.
+    ExpectedLookup[] expectedLookups;
+
+    uint256 callCount;
+    bytes returnData;
+    bytes32 rollingHash;
+}
+```
+
+---
+
+## What an entry represents
+
+An entry is the complete pre-simulated record of one top-level cross-chain interaction. Before you can build an entry, you must simulate the full execution graph:
+
+- Run the destination call and record its return data
+- Detect any reentrant cross-chain calls the destination makes and recurse
+- Record every call's success/failure flag and return data in execution order
+- Record every nesting boundary (when control enters and exits a reentrant frame)
+
+The `rollingHash` you compute from this simulation is what binds the proof to the actual on-chain execution. If a single call returns different data than you recorded, or a nesting boundary is in the wrong place, the `rollingHash` check reverts the entry.
+
+---
+
+## Supporting structs
+
+### `StateDelta` (L1 only)
+
+Each `StateDelta` in `stateDeltas[]` represents one rollup's state transition caused by this entry. The `currentState` field is checked against `rollups[rollupId].stateRoot` at consumption time — a mismatch reverts `StateRootMismatch(rollupId)`.
+
+```solidity
+struct StateDelta {
+    uint256 rollupId;      // which rollup's state changes
+    bytes32 currentState;  // pre-state root: must match rollups[rollupId].stateRoot at consumption
+    bytes32 newState;      // post-execution state root applied after the entry completes
+    int256  etherDelta;    // signed ETH balance change for this rollup (positive = deposit, negative = withdrawal)
+}
+```
+
+Every L1 entry must include at least one `StateDelta`. The prover guarantees this — an empty `stateDeltas[]` is not rejected on-chain, but it removes the soundness backstop that prevents an entry from being consumed against a stale trajectory.
+
+### `L2ToL1Call`
+
+Each element of `l2ToL1Calls[]` is one call in the flat execution sequence. All calls — entry-level and reentrant — share the same array, walked by the `_currentL2ToL1Call` cursor.
+
+```solidity
+struct L2ToL1Call {
+    bool    isStatic;        // if true, dispatched via STATICCALL — no state writes, zero value
+    address targetAddress;   // contract called on the target rollup
+    uint256 value;           // ETH sent with the call
+    bytes   data;            // calldata (selector + encoded arguments)
+    address sourceAddress;   // identity of the caller on the source rollup
+    uint256 sourceRollupId;  // which rollup the caller originates from
+    uint256 revertSpan;      // 0 = normal; N > 0 = force-revert the next N calls' state effects
+}
+```
+
+The L2 mirror, `CrossChainCall`, is field-for-field identical — only the type name differs.
+
+### `ExpectedL1ToL2Call`
+
+Each element of `expectedL1ToL2Calls[]` is the pre-computed result for one successful reentrant call. When the destination contract calls back through a proxy during entry execution, `_consumeNestedAction` matches sequentially against this array.
+
+```solidity
+struct ExpectedL1ToL2Call {
+    bytes32 crossChainCallHash;   // hash of the reentrant call
+    uint256 destinationRollupId;  // rollup this reentrant call targets — must be in the entry's stateDeltas
+    uint256 callCount;            // how many calls from l2ToL1Calls[] this reentrant frame processes
+    bytes   returnData;           // pre-computed return value (must succeed — failed calls use ExpectedLookup)
+}
+```
+
+**Important:** An `ExpectedL1ToL2Call` can only represent a successful reentrant call. If the reentrant call must revert (for example because the destination wraps it in a `try/catch`), use a nested `ExpectedLookup` with `failed = true` inside `entry.expectedLookups[]` instead. A reverting reentrant call cannot advance the consumption cursor, so it cannot be expressed as an `ExpectedL1ToL2Call`.
+
+---
+
+## Computing the `crossChainCallHash`
+
+Every cross-chain call is identified by a deterministic hash of six fields. Both on-chain contracts and off-chain tooling compute the same value from the same preimage.
+
+```solidity
+crossChainCallHash = keccak256(abi.encode(
+    uint256 targetRollupId,  // the rollup where the call executes
+    address targetAddress,   // the contract being called on that rollup
+    uint256 value,           // ETH value sent (0 for static calls)
+    bytes   data,            // calldata: selector + ABI-encoded arguments
+    address sourceAddress,   // the caller's identity on the source rollup
+    uint256 sourceRollupId   // the rollup the caller originates from
+))
+```
+
+The on-chain `EEZ` contract exposes this as `computeCrossChainCallHash(...)` — a `public pure` function you can call off-chain for verification. The `E2EHelpers.sol` script library provides a free function with the same formula:
+
+```solidity
+// From script/e2e/shared/E2EHelpers.sol
+function crossChainCallHash(
+    uint256 targetRollupId,
+    address targetAddress,
+    uint256 value,
+    bytes memory data,
+    address sourceAddress,
+    uint256 sourceRollupId
+) pure returns (bytes32) {
+    return keccak256(abi.encode(
+        targetRollupId, targetAddress, value, data, sourceAddress, sourceRollupId
+    ));
+}
+```
+
+### Hash semantics by entry point
+
+| Where the call originates | `targetRollupId` | `targetAddress` | `sourceRollupId` |
+| --- | --- | --- | --- |
+| `executeCrossChainCall` on L1 proxy | proxy's `originalRollupId` | proxy's `originalAddress` | `0` (`MAINNET_ROLLUP_ID`) |
+| `executeCrossChainCall` on L2 proxy | proxy's `originalRollupId` | proxy's `originalAddress` | this L2's `ROLLUP_ID` |
+| Reentrant call during execution | same as above for the proxy making the call | same | same |
+| `executeL2TX` | n/a — entry has `proxyEntryHash == bytes32(0)` | — | — |
+
+For the counter example from the e2e scripts, the L1-to-L2 cross-chain call hash is:
+
+```solidity
+bytes32 hash = crossChainCallHash(
+    L2_ROLLUP_ID,            // call executes on L2
+    address(counterL2),      // Counter contract on L2
+    0,                       // no ETH
+    abi.encodeWithSelector(Counter.increment.selector),
+    address(counterAndProxy), // caller on L1
+    MAINNET_ROLLUP_ID        // caller originates from L1 (0)
+);
+```
+
+This same hash is used as `proxyEntryHash` in the L1 entry, as `proxyEntryHash` in the L2 mirror entry, and as the call hash the L1 proxy presents to `executeCrossChainCall` at runtime. Both sides always compute the same value because the six inputs are identical.
+
+---
+
+## Computing the `rollingHash`
+
+The `rollingHash` is a single `bytes32` accumulator that commits to every call result and every nesting boundary in the entry's execution. The accumulator starts at `bytes32(0)` and is updated at four tagged events. To build the correct `rollingHash` for any entry, simulate the execution graph and apply each event in the order the on-chain protocol produces them.
+
+### The four tagged events
+
+```text
+CALL_BEGIN   = 1   keccak256(abi.encodePacked(prev, uint8(1), callNumber))
+CALL_END     = 2   keccak256(abi.encodePacked(prev, uint8(2), callNumber, success, returnData))
+NESTED_BEGIN = 3   keccak256(abi.encodePacked(prev, uint8(3), nestedNumber))
+NESTED_END   = 4   keccak256(abi.encodePacked(prev, uint8(4), nestedNumber))
+```
+
+- **`CALL_BEGIN`**: emitted when the processor starts a call. `callNumber` is the 1-indexed global call counter (`_currentL2ToL1Call`).
+- **`CALL_END`**: emitted when the call completes. `success` is the `bool` from the proxy's `.call`, and `returnData` is the full ABI-encoded return payload.
+- **`NESTED_BEGIN`**: emitted when a reentrant frame starts. `nestedNumber` is the 1-indexed count of `ExpectedL1ToL2Call` entries consumed so far.
+- **`NESTED_END`**: emitted when a reentrant frame returns.
+
+### Walk-through: simple entry with no reentry
+
+Use `RollingHashBuilder` to build the hash in the same order the on-chain processor produces events. For an entry with a single call that returns `abi.encode(uint256(1))`:
+
+The raw hash formulas without `RollingHashBuilder`:
+
+```text
+prev = bytes32(0)
+CALL_BEGIN(1):  prev = keccak256(abi.encodePacked(prev, uint8(1), uint256(1)))
+CALL_END(1):    prev = keccak256(abi.encodePacked(prev, uint8(2), uint256(1), true, abi.encode(uint256(1))))
+// final prev is the rollingHash
+```
+
+This matches exactly the counter e2e script:
+
+```solidity
+bytes32 rh = bytes32(0);
+rh = RollingHashBuilder.appendCallBegin(rh, 1);
+rh = RollingHashBuilder.appendCallEnd(rh, 1, true, abi.encode(uint256(1)));
+// rh is now entry.rollingHash
+```
+
+### Walk-through: entry with a reentrant call
+
+For an entry where call 1 (entry-level) triggers a reentrant call that processes calls 2–3, then call 4 continues at entry-level:
+
+```text
+CALL_BEGIN(1)
+  NESTED_BEGIN(1)
+    CALL_BEGIN(2)
+    CALL_END(2, success2, returnData2)
+    CALL_BEGIN(3)
+    CALL_END(3, success3, returnData3)
+  NESTED_END(1)
+CALL_END(1, success1, returnData1)
+CALL_BEGIN(4)
+CALL_END(4, success4, returnData4)
+```
+
+The nesting is what forces the builder to simulate the full execution graph. A reentrant call fires between `CALL_BEGIN(n)` and `CALL_END(n)` of the outer call — specifically when the destination contract calls back through a proxy during its execution. `NESTED_BEGIN` records the moment the reentrant frame starts; `NESTED_END` records when it returns. `callCount` for the outer entry-level frame is 3 (calls 1, 4 at the entry level — but call 1 spans from `CALL_BEGIN(1)` to `CALL_END(1)` inclusive of the nested frame). `expectedL1ToL2Calls[0].callCount` is 2 (calls 2 and 3 inside the reentrant frame). The partition invariant `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length` becomes `2 + 2 == 4`.
+
+---
+
+## The `E2EHelpers` utility library
+
+The `script/e2e/shared/E2EHelpers.sol` file provides two utilities that eliminate manual hash construction errors.
+
+### `crossChainCallHash` free function
+
+Computes the canonical call hash from individual fields:
+
+```solidity
+import { crossChainCallHash } from "script/e2e/shared/E2EHelpers.sol";
+
+bytes32 hash = crossChainCallHash(
+    L2_ROLLUP_ID,
+    address(targetContract),
+    0,
+    abi.encodeWithSelector(MyContract.myFunction.selector, arg1),
+    address(callerContract),
+    MAINNET_ROLLUP_ID
+);
+```
+
+A backward-compatible `Action` struct and `actionHash(Action)` wrapper are also provided for scripts that prefer a single-struct form. Both produce the same preimage:
+
+```solidity
+Action memory action = Action({
+    targetRollupId: L2_ROLLUP_ID,
+    targetAddress:  address(targetContract),
+    value:          0,
+    data:           abi.encodeWithSelector(MyContract.myFunction.selector),
+    sourceAddress:  address(callerContract),
+    sourceRollupId: MAINNET_ROLLUP_ID
+});
+bytes32 hash = actionHash(action); // identical to crossChainCallHash(...)
+```
+
+### `RollingHashBuilder` library
+
+Reproduces the exact same tagged-hash sequence that `EEZ._processNCalls` and `_consumeNestedAction` produce on-chain. Use it to compute `entry.rollingHash` without worrying about `abi.encodePacked` field ordering:
+
+```solidity
+library RollingHashBuilder {
+    function appendCallBegin(bytes32 prev, uint256 callNumber)
+        internal pure returns (bytes32);
+
+    function appendCallEnd(bytes32 prev, uint256 callNumber, bool success, bytes memory retData)
+        internal pure returns (bytes32);
+
+    function appendNestedBegin(bytes32 prev, uint256 nestedNumber)
+        internal pure returns (bytes32);
+
+    function appendNestedEnd(bytes32 prev, uint256 nestedNumber)
+        internal pure returns (bytes32);
+}
+```
+
+Build the rolling hash by calling these in the same order the on-chain execution produces them. For the hello-world e2e example, where `getWord()` returns `abi.encode("World")`:
+
+```solidity
+bytes32 rh = bytes32(0);
+rh = RollingHashBuilder.appendCallBegin(rh, 1);
+rh = RollingHashBuilder.appendCallEnd(rh, 1, true, abi.encode("World"));
+// rh is the rollingHash to put in the L2 entry
+```
+
+### Empty-array helpers
+
+`E2EHelpers.sol` also exports free functions that return typed empty arrays, saving boilerplate in entry construction:
+
+```solidity
+noLookupCalls()      // → LookupCall[]        (empty)
+noNestedActions()    // → ExpectedL1ToL2Call[] (empty)
+noCalls()            // → L2ToL1Call[]         (empty)
+noExpectedLookups()  // → ExpectedLookup[]     (empty)
+```
+
+---
+
+## Full example: the counter scenario
+
+The counter e2e script builds both sides of an L1→L2 cross-chain `Counter.increment()` call. The L1 entry carries the state delta and cached return data; the L2 mirror entry carries the actual call that will drive `Counter.increment()` on the L2 instance.
+
+### L1 entry
+
+```solidity
+function _l1Entries(address counterL2, address counterAndProxy)
+    internal pure returns (ExecutionEntry[] memory entries)
+{
+    // Describe the L2 state transition this entry causes
+    StateDelta[] memory deltas = new StateDelta[](1);
+    deltas[0] = StateDelta({
+        rollupId:     L2_ROLLUP_ID,
+        currentState: keccak256("l2-initial-state"),
+        newState:     keccak256("l2-state-after-counter"),
+        etherDelta:   0
+    });
+
+    entries = new ExecutionEntry[](1);
+    entries[0] = ExecutionEntry({
+        stateDeltas:          deltas,
+        proxyEntryHash:       crossChainCallHash(
+                                  L2_ROLLUP_ID, counterL2, 0,
+                                  abi.encodeWithSelector(Counter.increment.selector),
+                                  counterAndProxy, MAINNET_ROLLUP_ID
+                              ),
+        destinationRollupId:  L2_ROLLUP_ID,
+        l2ToL1Calls:          noCalls(),       // no calls execute on L1 side
+        expectedL1ToL2Calls:  noNestedActions(), // no reentrant calls
+        expectedLookups:      new ExpectedLookup[](0),
+        callCount:            0,               // 0 calls at entry level on L1
+        returnData:           abi.encode(uint256(1)), // cached result of increment()
+        rollingHash:          bytes32(0)       // no calls → empty rolling hash
+    });
+}
+```
+
+The L1 entry has `callCount: 0` and an empty `l2ToL1Calls[]` because no calls execute on L1 — the entry is purely a state-delta carrier and cached-return-data store. The `proxyEntryHash` is the call hash the L1 proxy will present to `executeCrossChainCall` at runtime.
+
+### L2 entry (mirror)
+
+```solidity
+function _l2Entries(address counterL2, address counterAndProxy)
+    internal pure returns (L2ExecutionEntry[] memory entries)
+{
+    // The actual call that drives Counter.increment() on L2
+    CrossChainCall[] memory calls = new CrossChainCall[](1);
+    calls[0] = CrossChainCall({
+        isStatic:      false,
+        targetAddress: counterL2,
+        value:         0,
+        data:          abi.encodeWithSelector(Counter.increment.selector),
+        sourceAddress: counterAndProxy,   // the L1 caller's identity
+        sourceRollupId: MAINNET_ROLLUP_ID,
+        revertSpan:    0
+    });
+
+    // Build the rolling hash: one call, returns abi.encode(uint256(1))
+    bytes32 rh = bytes32(0);
+    rh = RollingHashBuilder.appendCallBegin(rh, 1);
+    rh = RollingHashBuilder.appendCallEnd(rh, 1, true, abi.encode(uint256(1)));
+
+    entries = new L2ExecutionEntry[](1);
+    entries[0] = L2ExecutionEntry({
+        proxyEntryHash:       crossChainCallHash(
+                                  L2_ROLLUP_ID, counterL2, 0,
+                                  abi.encodeWithSelector(Counter.increment.selector),
+                                  counterAndProxy, MAINNET_ROLLUP_ID
+                              ),
+        incomingCalls:        calls,
+        expectedOutgoingCalls: new ExpectedOutgoingCrossChainCall[](0),
+        expectedLookups:      new L2ExpectedLookup[](0),
+        callCount:            1,     // one entry-level call on L2
+        returnData:           abi.encode(uint256(1)),
+        rollingHash:          rh
+    });
+}
+```
+
+Notice that `proxyEntryHash` is **identical** on both sides — the same six hash inputs produce the same `bytes32`. This is the link that lets the L1 registry verify the entry matches the incoming proxy call, while the L2 system delivers the real execution.
+
+---
+
+## Common errors and how to avoid them
+
+| Error | Cause | Fix |
+| --- | --- | --- |
+| `RollingHashMismatch` | Wrong call order, wrong return data, or missing nesting events in your hash | Re-simulate the execution graph and rebuild the rolling hash step by step |
+| `UnconsumedL2ToL1Calls` | `_currentL2ToL1Call != l2ToL1Calls.length` at entry end | Ensure `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length` |
+| `UnconsumedL1ToL2Calls` | `_lastL1ToL2CallConsumed != expectedL1ToL2Calls.length` at entry end | Every `ExpectedL1ToL2Call` must be consumed — verify reentrant calls fire in the order declared |
+| `StateRootMismatch` | `StateDelta.currentState` doesn't match the live state root at consumption | Rebuild the entry with the correct pre-state root for each rollup |
+| `ExecutionNotFound` | `proxyEntryHash` doesn't match the live call hash | Verify the six hash inputs — check that `sourceAddress`, `sourceRollupId`, and `value` are exact |

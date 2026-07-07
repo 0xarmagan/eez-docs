@@ -67,7 +67,7 @@ struct StateDelta {
 }
 ```
 
-`l2ToL1Calls[]` holds **all** calls — both the top-level calls and any reentrant callbacks — in a single flat array. `callCount` tells the protocol how many calls belong to the outermost frame; the rest are consumed by reentrant frames whose slice sizes are recorded in `expectedL1ToL2Calls[i].callCount`. See [Build Entries](pathname:///guides/build-execution-entries) for a step-by-step builder walkthrough.
+`l2ToL1Calls[]` holds **all** calls — both the top-level calls and any reentrant callbacks — in a single flat array. `callCount` tells the protocol how many calls belong to the outermost frame; the rest are consumed by reentrant frames whose slice sizes are recorded in `expectedL1ToL2Calls[i].callCount`. See [Build Entries](/guides/build-execution-entries) for a step-by-step builder walkthrough.
 
 </details>
 
@@ -93,7 +93,7 @@ require(_currentL2ToL1Call == entry.l2ToL1Calls.length);   // UnconsumedL2ToL1Ca
 require(_lastL1ToL2CallConsumed == entry.expectedL1ToL2Calls.length); // UnconsumedL1ToL2Calls
 ```
 
-See [Build Entries](pathname:///guides/build-execution-entries) for the constructor walkthrough.
+See [Build Entries](/guides/build-execution-entries) for the constructor walkthrough.
 
 </details>
 
@@ -106,7 +106,7 @@ An entry's `proxyEntryHash` field determines how it is consumed:
 
 ## What Happens at `postAndVerifyBatch`
 
-`postAndVerifyBatch` is the single entry point that loads a full batch onto L1. It verifies all proofs atomically, marks each rollup as verified for the current block, drains any leading transient entries inline (including a meta-hook callback on `msg.sender`), and publishes the remainder into per-rollup persistent queues. See [Post Batch](pathname:///guides/post-verify-batch) for the complete 8-step pipeline, struct fields, and error table.
+`postAndVerifyBatch` is the single entry point that loads a full batch onto L1. It verifies all proofs atomically, marks each rollup as verified for the current block, drains any leading transient entries inline (including a meta-hook callback on `msg.sender`), and publishes the remainder into per-rollup persistent queues. See [Post Batch](/guides/post-verify-batch) for the complete 8-step pipeline, struct fields, and error table.
 
 :::note
 The phrase "same block" is load-bearing. All entries posted in a `postAndVerifyBatch` call must be consumed before the block ends. Any unclaimed entry is overwritten when the next `postAndVerifyBatch` verifies the same rollup — or simply becomes unreachable because the `lastVerifiedBlock` guard will reject it in a future block.

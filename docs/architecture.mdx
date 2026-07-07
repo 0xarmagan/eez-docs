@@ -37,7 +37,7 @@ Anyone can register a rollup by calling `registerRollup(rollupContract, initialS
 - Per-rollup proof system assignments (which rollup accepts which subset of proof systems)
 - An optional `blockNumber` that binds the batch to a specific L1 block's context
 
-Verification is atomic: all proofs must pass or the batch reverts. On success, EEZ marks each participating rollup as verified this block, dispatches the leading transient entries into an in-memory stream (drained inline and via the meta hook), and pushes the remainder into per-rollup persistent queues. See [Post Batch](pathname:///guides/post-verify-batch) for the full 8-step pipeline, struct fields, and error table.
+Verification is atomic: all proofs must pass or the batch reverts. On success, EEZ marks each participating rollup as verified this block, dispatches the leading transient entries into an in-memory stream (drained inline and via the meta hook), and pushes the remainder into per-rollup persistent queues. See [Post Batch](/guides/post-verify-batch) for the full 8-step pipeline, struct fields, and error table.
 
 ### Execution queues: transient and deferred
 

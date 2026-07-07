@@ -1,0 +1,228 @@
+---
+title: "How to Post and Verify an EEZ Cross-Chain Execution Batch"
+sidebar_label: "Post Batch"
+description: "Assemble a ProofSystemBatchPerVerificationEntries struct, choose the transient/deferred split, use the meta hook, and consume entries in the same block."
+---
+
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
+Posting a batch is the workhorse operation of EEZ — it is what a rollup's builder does once per L1 block for every block in which any cross-rollup activity happens on that rollup. If you are a rollup operator running a builder node, you will call `postAndVerifyBatch` continuously; if you are a dApp developer, you will typically not call it directly but will construct entries that a builder later includes. Reach for this guide when you have already built [ExecutionEntry](/guides/build-execution-entries) structs and generated proofs and you now need to decide **how** they get onto L1: which entries should be consumed inside the posting transaction (transient), which should be queued for later same-block consumption (deferred), and whether to hook the meta callback to drive the transient stream from your own contract.
+
+Submitting a batch to EEZ is the act of publishing a set of pre-simulated cross-chain execution entries together with the proofs that attest to their correctness. The single `postAndVerifyBatch` function verifies all proofs atomically, marks the participating rollups as active for the current block, and dispatches entries into either an in-transaction transient stream or persistent per-rollup queues. Understanding how to structure the batch struct — especially the transient/deferred split and the meta hook — determines whether entries are consumed in the same transaction that posts them or consumed later by separate calls.
+
+## The `ProofSystemBatchPerVerificationEntries` struct
+
+A single batch covers one or more rollups verified by one or more proof systems. Every field is required; there is no partial construction.
+
+```solidity
+struct ProofSystemBatchPerVerificationEntries {
+    // All execution entries for this batch, across all rollups.
+    // entries[0..transientExecutionEntryCount) → transient stream.
+    // entries[transientExecutionEntryCount..]  → per-rollup persistent queues.
+    ExecutionEntry[] entries;
+
+    // Top-level lookup calls (static reads + top-level reverting calls).
+    // lookupCalls[0..transientLookupCallCount) → transient lookup table.
+    // lookupCalls[transientLookupCallCount..]  → per-rollup persistent lookupQueue.
+    // Nested lookups live inside their entries — not here.
+    LookupCall[] l1ToL2lookupCalls;
+
+    // How many leading entries go into the transient stream.
+    // Must be ≤ entries.length (else TransientCountExceedsEntries).
+    uint256 transientExecutionEntryCount;
+
+    // How many leading lookup calls go into the transient lookup table.
+    // Must be ≤ l1ToL2lookupCalls.length (else TransientLookupCallCountExceedsLookupCalls).
+    uint256 transientLookupCallCount;
+
+    // Batch-global list of proof system verifier addresses, strictly ascending.
+    // No duplicates, no address(0).
+    address[] proofSystems;
+
+    // One row per participating rollup, strictly ascending by rollupId.
+    // Each row selects which proof systems in proofSystems[] this rollup uses
+    // via a strictly-ascending index list into proofSystems[].
+    RollupIdWithProofSystems[] rollupIdsWithProofSystems;
+
+    // EIP-4844 blob indices this batch references (empty if no blobs).
+    uint256[] blobIndices;
+
+    // Batch-scoped calldata folded into the public inputs hash.
+    bytes callData;
+
+    // One proof per entry in proofSystems[] — verified atomically.
+    bytes[] proofs;
+
+    // L1 block number this batch binds to.
+    // 0 = no block context. type(uint64).max = latest (current timestamp + prev block hash).
+    // Forwarded to every rollup's getCustomData(blockNumber).
+    uint64 blockNumber;
+}
+```
+
+### `RollupIdWithProofSystems`
+
+Each row in `rollupIdsWithProofSystems[]` pairs a rollup with the subset of proof systems it accepts for this batch. The `rollupId` must be a registered ID — see [`rollupId`](pathname:///reference/glossary#rollupid) in the glossary for the sentinel and assignment rules.
+
+```solidity
+struct RollupIdWithProofSystems {
+    uint256 rollupId;
+    uint64[] proofSystemIndex; // strictly-ascending indices into proofSystems[]
+}
+```
+
+The length of `proofSystemIndex[]` must meet or exceed the rollup's configured threshold — the rollup's manager enforces this inside `checkProofSystemsAndGetVkeys` and reverts `ThresholdNotMet` if it doesn't.
+
+---
+
+## The 8-step pipeline
+
+`postAndVerifyBatch` executes the following steps in strict order. Any failure at any step reverts the entire call — there is no partial-batch state.
+
+## Step 1 — Reentry guard
+
+Reverts `PostBatchReentry` if `_transientExecutions.length != 0` — i.e., another batch is already mid-flight in this transaction (typically because a meta-hook re-entered `postAndVerifyBatch`).
+
+## Step 2 — Structural validation
+
+Confirms all sorted-ascending invariants (`proofSystems[]`, `rollupIdsWithProofSystems[]`, every `proofSystemIndex[]`), rollup membership, and transient-count bounds. No external calls. See the [validation error table](#validation-constraints-enforced-on-chain) below for the exhaustive list.
+
+## Step 3 — Fetch vkeys and verify proofs
+
+For each rollup, calls `IRollupContract.checkProofSystemsAndGetVkeys(subset)` as a `STATICCALL` to fetch the vkey matrix (the STATICCALL prevents a malicious manager from mutating state). Builds the shared and per-proof-system public inputs hashes, then calls `IProofSystem.verify(proof, publicInputsHash)` for every proof system. All proofs must pass — one failure reverts with `InvalidProof`.
+
+## Step 4 — Mark verified-this-block
+
+Sets `lastVerifiedBlock = block.number` for each participating rollup and wipes its execution queue, lookup queue, and cursor. A same-block re-verify **replaces** (not appends to) the prior batch's entries for that rollup.
+
+## Step 5 — Load the transient stream
+
+Copies the leading `transientExecutionEntryCount` entries into `_transientExecutions` and the leading `transientLookupCallCount` lookup calls into `_transientLookupCalls`. These are immediately available for consumption within the same transaction.
+
+## Step 6 — Drain immediate entries inline
+
+While the next transient entry has `proxyEntryHash == bytes32(0)`, self-calls `attemptApplyImmediate`. A reverting immediate entry emits `ImmediateEntrySkipped` and the loop advances — it is not a fatal error.
+
+## Step 7 — Meta hook
+
+If transient entries remain and `msg.sender` has code, calls `IMetaCrossChainReceiver(msg.sender).executeMetaCrossChainTransactions()`. The caller can consume any remaining transient entries by calling back through cross-chain proxies in the same transaction.
+
+## Step 8 — Cleanup and publish
+
+Deletes the transient tables, resets the transient cursor, then unconditionally pushes the remaining (post-transient) entries into per-rollup persistent queues, keyed by `destinationRollupId`, for consumption via `executeCrossChainCall` or `executeL2TX` in the same block.
+
+---
+
+## Checking queue state
+
+Before consuming entries, check the queue state to understand what is available and where the cursor is:
+
+```solidity
+// Has this rollup been verified in the current block?
+uint256 lastBlock = eez.lastVerifiedBlock(rollupId);
+bool activeThisBlock = (lastBlock == block.number);
+
+// How many entries are in the persistent queue?
+uint256 total = eez.queueLength(rollupId);
+
+// Which entry is next to be consumed?
+uint256 cursor = eez.executionQueueIndex(rollupId);
+
+// Remaining entries to consume:
+uint256 remaining = total - cursor;
+```
+
+The queue is wiped on every `postAndVerifyBatch` call that touches a rollup — even for a same-block re-verify. The second batch's entries **replace** (not append to) the first batch's entries for that rollup. Never rely on cross-batch queue accumulation within a single block.
+
+Entries that are not consumed in the posting block are never consumed — the `lastVerifiedBlock` gate blocks them, and the queue is overwritten by the next batch that verifies the rollup. Design your batches and consumption sequence so every entry in the transient prefix is consumed within `postAndVerifyBatch` (by immediate inline execution or the meta hook), and every persistent entry is consumed in the same block via `executeCrossChainCall` or `executeL2TX`.
+
+---
+
+## Full example: the hello-world scenario
+
+The hello-world e2e script posts a single deferred L1 entry and consumes it immediately by calling `helloL2World()` through the `HelloWorldL1` contract. The `Batcher` contract wraps the entire sequence:
+
+```solidity
+contract Batcher {
+    function execute(
+        EEZ rollups,
+        address proofSystem,
+        ExecutionEntry[] calldata entries,
+        LookupCall[] calldata lookupCalls,
+        HelloWorldL1 h1
+    ) external returns (string memory greeting) {
+        address[] memory psList = new address[](1);
+        psList[0] = proofSystem;
+
+        uint64[] memory psIdx = new uint64[](1);
+        psIdx[0] = 0;
+
+        RollupIdWithProofSystems[] memory rps = new RollupIdWithProofSystems[](1);
+        rps[0] = RollupIdWithProofSystems({
+            rollupId: L2_ROLLUP_ID,
+            proofSystemIndex: psIdx
+        });
+
+        bytes[] memory proofs = new bytes[](1);
+        proofs[0] = "proof";
+
+        ProofSystemBatchPerVerificationEntries memory batch =
+            ProofSystemBatchPerVerificationEntries({
+                blockNumber:                  0,
+                entries:                      entries,
+                l1ToL2lookupCalls:            lookupCalls,
+                transientExecutionEntryCount: 0,
+                transientLookupCallCount:     0,
+                proofSystems:                 psList,
+                rollupIdsWithProofSystems:    rps,
+                blobIndices:                  new uint256[](0),
+                callData:                     "",
+                proofs:                       proofs
+            });
+
+        // Post the batch — entry goes to L2_ROLLUP_ID's persistent queue.
+        // lastVerifiedBlock(L2_ROLLUP_ID) is now block.number.
+        rollups.postAndVerifyBatch(batch);
+
+        // Consume the entry in the same block.
+        // helloL2World() calls the proxy → executeCrossChainCall →
+        // matches entries[0].proxyEntryHash → returns entries[0].returnData.
+        greeting = h1.helloL2World();
+    }
+}
+```
+
+The entry's `returnData` is `abi.encode("World")`. `h1.helloL2World()` decodes it and returns the greeting string. The state delta in `entries[0].stateDeltas` advances L2's state root from `keccak256("l2-initial-state")` to `keccak256("l2-state-after-helloworld")` in the registry.
+
+---
+
+## Validation constraints enforced on-chain
+
+`postAndVerifyBatch` validates the batch structure before any proofs are checked. These constraints are all enforced via `_validateStructure`:
+
+| Constraint | Error |
+| --- | --- |
+| `proofSystems[]` strictly ascending, no `address(0)` | `DuplicateProofSystem` |
+| `rollupIdsWithProofSystems[].rollupId` strictly ascending, all registered, all \> 0 | `InvalidProofSystemConfig` |
+| Each `proofSystemIndex[]` strictly ascending, all in `[0, proofSystems.length)` | `InvalidProofSystemConfig` |
+| `transientExecutionEntryCount <= entries.length` | `TransientCountExceedsEntries` |
+| `transientLookupCallCount <= l1ToL2lookupCalls.length` | `TransientLookupCallCountExceedsLookupCalls` |
+| Each entry's `destinationRollupId` present in `rollupIdsWithProofSystems` | `RollupNotInBatch(rid)` |
+| No re-entry (`_transientExecutions.length == 0`) | `PostBatchReentry` |
+
+All proofs must verify atomically — a single failure reverts the entire `postAndVerifyBatch` call. No partial verification is possible.
+
+---
+
+## Same-block execution requirement
+
+All entries posted in a given block must be consumed in that same block. The `lastVerifiedBlock(rollupId)` check enforces this:
+
+```text
+executeCrossChainCall → requires lastVerifiedBlock(rollupId) == block.number
+executeL2TX          → requires lastVerifiedBlock(rollupId) == block.number
+```
+
+Entries not consumed in their posting block are stranded — the `lastVerifiedBlock` gate prevents consumption in any later block, and the next `postAndVerifyBatch` that touches the rollup will wipe and replace the queue. Design your batch and your consumption transactions to complete within the same block as the `postAndVerifyBatch` call.
