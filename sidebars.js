@@ -16,7 +16,11 @@
  */
 const sidebars = {
   docsSidebar: [
-    {type: 'doc', id: 'introduction'},
+    {
+      type: 'category',
+      label: 'Get Started',
+      items: ['introduction', 'quickstart', 'architecture'],
+    },
   ],
 };
 

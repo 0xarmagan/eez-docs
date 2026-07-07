@@ -1,0 +1,148 @@
+---
+title: "EEZ Architecture: L1/L2 Contracts and Execution Model"
+sidebar_label: "Architecture"
+description: "Deep-dive into EEZ's L1 registry, L2 manager, CrossChainProxy identity, per-rollup execution queues, multi-prover verification, and rolling-hash integrity."
+---
+
+EEZ is built around a two-sided contract architecture: a central L1 registry (`EEZ.sol`) that acts as the source of truth for rollup state and execution, and a lightweight L2 manager (`EEZL2.sol`) on each participating rollup that receives system-loaded execution tables. Bridging the two sides is the `CrossChainProxy` — a deterministic CREATE2 contract that gives each cross-chain address a stable on-chain identity. Shared base logic lives in `EEZBase.sol`, and per-rollup policy lives in individual `Rollup.sol` manager contracts deployed and owned by rollup operators. Understanding how these pieces interact is essential for both integrating with EEZ and reasoning about its security properties.
+
+## Contract overview
+
+The following table shows the main contracts, where they live, and their primary responsibility:
+
+| Contract | Chain | Responsibility |
+| --- | --- | --- |
+| `EEZ.sol` | L1 | Central registry: rollup state roots, ether accounting, batch verification, per-rollup execution queues |
+| `EEZL2.sol` | L2 | System-driven execution: receives tables from the sequencer, executes incoming cross-chain calls |
+| `EEZBase.sol` | Both | Shared base: rolling-hash accumulator, proxy registry, CREATE2 proxy creation, revert-transport helpers |
+| `Rollup.sol` | L1 | Per-rollup manager: proof systems, verification keys, M-of-N threshold, ownership, state-root escape hatch |
+| `CrossChainProxy.sol` | Both | Deterministic proxy: routes inbound calls to the manager, forwards outbound calls on behalf of the original address |
+
+## The L1 EEZ contract
+
+`EEZ.sol` is the heart of the protocol. It maintains two mappings for each registered rollup: `rollups[rollupId]` (a `RollupConfig` with the manager address, current state root, and ETH balance) and `verificationByRollup[rollupId]` (a `RollupVerification` holding the per-rollup execution queue, lookup call queue, consumption cursor, and the `lastVerifiedBlock` marker).
+
+### Rollup registration
+
+Anyone can register a rollup by calling `registerRollup(rollupContract, initialStateRoot)`. The caller pre-deploys a `Rollup.sol`-conforming manager, then passes its address to the registry. The registry assigns a fresh rollup ID (starting at 1; ID 0 is the reserved `MAINNET_ROLLUP_ID`) and calls `rollupContractRegistered(rollupId)` on the manager once as a one-shot initialisation callback. After registration the manager is immutable in the registry — you cannot swap it out.
+
+### Batch posting and verification
+
+`postAndVerifyBatch` is the primary entry point for the off-chain sequencer. It accepts a `ProofSystemBatchPerVerificationEntries` struct that packages together:
+
+- The array of `ExecutionEntry` structs to verify
+- Lookup calls for top-level static reads and reverting top-level calls
+- The `transientExecutionEntryCount` and `transientLookupCallCount` that control which entries are loaded into the transient (in-memory) table versus the persistent per-rollup queue
+- The ordered list of proof system addresses and one proof per proof system
+- Per-rollup proof system assignments (which rollup accepts which subset of proof systems)
+- An optional `blockNumber` that binds the batch to a specific L1 block's context
+
+Verification is atomic: all proofs must pass or the batch reverts. On success, EEZ marks each participating rollup as verified this block, dispatches the leading transient entries into an in-memory stream (drained inline and via the meta hook), and pushes the remainder into per-rollup persistent queues. See [Post Batch](pathname:///guides/post-verify-batch) for the full 8-step pipeline, struct fields, and error table.
+
+### Execution queues: transient and deferred
+
+EEZ maintains two tiers of execution entries per batch:
+
+**Transient entries** are loaded into `_transientExecutions` during `postAndVerifyBatch` and are only consumable within that same call. They are the fast path for high-priority cross-chain calls — the meta hook fires in step 7 and the caller can consume all transient entries through proxy calls in the same transaction. At the end of `postAndVerifyBatch` the transient tables are deleted.
+
+**Deferred (persistent) entries** are pushed into `verificationByRollup[rollupId].executionQueue` in step 8. These are consumed in separate transactions later in the same L1 block via `executeCrossChainCall` (for proxy-triggered entries with a non-zero `proxyEntryHash`) or `executeL2TX(rollupId)` (for system-driven entries with `proxyEntryHash == bytes32(0)`). The `lastVerifiedBlock` gate ensures no entry survives past the block it was posted in — if it isn't consumed before the block ends, it becomes unreachable.
+
+### Per-rollup isolation
+
+Each rollup's queue is fully independent. A `postAndVerifyBatch` for rollup A does not interfere with rollup B's queue. Different rollups can interleave consumption — the meta hook may consume entries from multiple rollups in a single transaction by calling through their respective proxies. The only restriction is that same-rollup reentry is blocked: while an entry for rollup A is executing, another top-level call into rollup A's queue will revert.
+
+## The L2 EEZL2 contract
+
+`EEZL2.sol` is deliberately simpler than its L1 counterpart. It has no rollup registry, no state delta accounting, and no proof verification — all of that responsibility sits on L1. The L2 contract's only job is to execute the execution tables that the system address loads into it.
+
+The L2 contract is constructed with two immutables: `ROLLUP_ID` (the rollup's ID in the L1 registry) and [`SYSTEM_ADDRESS`](pathname:///reference/glossary#system-address). Only `SYSTEM_ADDRESS` can call `loadExecutionTable` or `executeIncomingCrossChainCall`.
+
+**`loadExecutionTable(entries, lookupCalls)`** wipes the existing table and loads fresh entries. Entries are only consumable in the same block they were loaded (`lastLoadBlock == block.number`). After that block, the table is unreachable until the next `loadExecutionTable` call.
+
+**`executeIncomingCrossChainCall(destination, value, data, sourceAddress, sourceRollup, entries, lookupCalls)`** is the atomic path: the system address replaces the entire execution table and drives the first entry's call in one transaction. `entries[0].incomingCalls[0]` is the inbound call itself. Any ETH forwarded as `msg.value` is treated as inbound and forwarded to `SYSTEM_ADDRESS` after the call completes (a burn path — value accounting lives on L1).
+
+The L2 struct vocabulary is self-relative rather than absolute: `incomingCalls` (calls executed on this L2) and `expectedOutgoingCalls` (pre-computed results of reentrant calls leaving this L2). This naming is intentional — an L2's counterpart can be L1 or another L2, so absolute names like `l1Calls` would frequently be wrong.
+
+## CrossChainProxy: deterministic cross-chain identity
+
+A `CrossChainProxy` is a CREATE2 contract that represents exactly one `(originalAddress, rollupId)` pair. It is the only way to trigger an execution entry on L1 (other than `executeL2TX` for system-driven entries). When the proxy receives a call, it forwards to `EEZ.executeCrossChainCall` (or `EEZ.staticCallLookup` in static context), and the EEZ contract routes to the matching execution entry using the computed `crossChainCallHash`.
+
+You create a proxy by calling `createCrossChainProxy(originalAddress, rollupId)` on the EEZ contract. The address is a deterministic CREATE2 hash of `(originalRollupId, originalAddress, manager)` — see [Cross-Chain Proxy](pathname:///concepts/cross-chain-proxy) for the exact formula. Two key properties follow: the address is **fully deterministic** (computable offline via `computeCrossChainProxyAddress`) and **manager-scoped** (the same `(originalAddress, rollupId)` pair on two different EEZ deployments produces different proxy addresses).
+
+The cross-chain call hash used to match entries in the execution queue is computed by `computeCrossChainCallHash`, available as a `pure` function on both the L1 `EEZ` and L2 `EEZL2` managers:
+
+```solidity
+function computeCrossChainCallHash(
+    uint256 targetRollupId,
+    address targetAddress,
+    uint256 value,
+    bytes memory data,
+    address sourceAddress,
+    uint256 sourceRollupId
+) public pure returns (bytes32) {
+    return keccak256(abi.encode(
+        targetRollupId, targetAddress, value, data, sourceAddress, sourceRollupId
+    ));
+}
+```
+
+Off-chain tooling must use this exact encoding — field order and `abi.encode` (not `abi.encodePacked`) — when pre-computing entry hashes to match against `entry.proxyEntryHash`.
+
+Static context detection (for read-only cross-chain calls) uses the EIP-1153 `tstore` / `tload` asymmetry: the proxy attempts a `tstore` in a self-call; if the self-call reverts, the proxy is inside a `STATICCALL` and routes to `staticCallLookup` instead of `executeCrossChainCall`.
+
+## Per-rollup Rollup.sol manager
+
+`Rollup.sol` is the reference per-rollup management contract. Each rollup operator deploys one and registers it with EEZ. The manager holds:
+
+- **Proof systems**: a mapping of `proofSystem => verificationKey`. Only non-zero vkeys are allowed. The owner adds proof systems with `addProofSystem` and removes them with `removeProofSystem`.
+- **Threshold**: the M-of-N minimum number of proof systems that must attest to a batch for it to be accepted. A threshold above the current PS count locks the rollup until more proof systems are added.
+- **Custom data**: `getCustomData(blockNumber)` returns an opaque blob that the EEZ registry folds into the batch's public inputs hash, binding the proof to a specific L1 block context. The reference implementation returns ABI-encoded `(uint256 timestamp, bytes32 blockHash)`: when `blockNumber` is the latest-block sentinel (`type(uint64).max`) it returns the current block's `block.timestamp` and previous block's `blockhash`; for any specific past block it returns `(0, blockhash(blockNumber))` — the timestamp is not recoverable on-chain for past blocks.
+- **State root escape**: `setStateRoot(newRoot)` lets the owner directly update the L1 state root outside of the proof system, subject to the registry's same-block lockout (`RollupBatchActiveThisBlock` reverts if a batch already touched the rollup this block).
+
+The `checkProofSystemsAndGetVkeys(proofSystems[])` function is called by EEZ during `postAndVerifyBatch`. It enforces the threshold, rejects any unknown proof system, and returns the verification key for each proof system in the submitted subset. This is a `STATICCALL` from EEZ — the manager cannot mutate state during proof verification.
+
+## Multi-prover model
+
+EEZ supports multiple independent proof systems attesting to the same batch. A batch carries a globally sorted list of proof system addresses and one proof per proof system. Each participating rollup selects the subset of proof systems it accepts via strictly-increasing indices into the global list. This allows different rollups to use different proof systems (ZK-SNARKs, ZK-STARKs, optimistic fraud proofs, or even a trusted multi-sig) while sharing the same batch and the same overhead.
+
+The public inputs hash that each proof system verifies is constructed in two stages. First, a shared component is computed covering all entry hashes, lookup call hashes, blob hashes, call data, and per-rollup custom data — this part is identical across all proof systems. Second, a per-proof-system component is computed from the vkeys contributed by each rollup that uses that proof system. The final `publicInputsHash[k]` for proof system `k` is `keccak256(sharedPublicInput, perPSAccumulator[k])`. This structure means proof systems with disjoint rollup memberships produce different public inputs, so a proof stolen from one proof system cannot be replayed against another.
+
+## Rolling hash integrity
+
+Every execution entry and every lookup call carries a `rollingHash` — a single `bytes32` that is the cumulative Keccak of all call events in execution order. Four tagged event types update the accumulator:
+
+| Tag | Value | Formula |
+| --- | --- | --- |
+| `CALL_BEGIN` | 1 | `keccak256(abi.encodePacked(prev, uint8(1), callNumber))` |
+| `CALL_END` | 2 | `keccak256(abi.encodePacked(prev, uint8(2), callNumber, success, retData))` |
+| `NESTED_BEGIN` | 3 | `keccak256(abi.encodePacked(prev, uint8(3), nestedNumber))` |
+| `NESTED_END` | 4 | `keccak256(abi.encodePacked(prev, uint8(4), nestedNumber))` |
+
+At the end of every entry, EEZ checks four invariants:
+
+1. `_rollingHash == entry.rollingHash` — every call result and nesting boundary matched exactly
+2. The flat call cursor equals `entry.l2ToL1Calls.length` — every call in the entry was processed
+3. The reentrant call cursor equals `entry.expectedL1ToL2Calls.length` — every expected reentrant call was consumed
+4. `totalEtherDelta == _entryEtherDelta` — the net ETH flow from the entry's state deltas matches actual ETH in/out
+
+A single mismatch anywhere — wrong return data, an extra call, a missing nesting boundary, reordered operations — changes the final hash and reverts with `RollingHashMismatch`. There is no path through which execution can diverge from the pre-committed proof and still complete successfully.
+
+## Revert span and forced-revert execution
+
+The `revertSpan` field on each call (`L2ToL1Call` on L1, `CrossChainCall` on L2) is the protocol's mechanism for expressing calls whose EVM state effects must be rolled back even though the calls themselves succeed. Setting `revertSpan = N` on a call causes EEZ to execute the next N calls (including the call with the non-zero `revertSpan`), capture their results in the rolling hash, and then roll back all their EVM state changes. This is distinct from a naturally-reverting call (where `revertSpan = 0` and the proxy's `.call` captures `(false, returnData)` into `CALL_END`) — a `revertSpan > 0` call succeeds at the EVM level but has its state effects forcibly undone.
+
+The typical use case is a call that ran successfully on the destination chain but whose effects need to be rolled back on the source chain's view (for example, a collateral check that passed on L2 but whose side effects should not persist on L1).
+
+## Execution flow: a complete example
+
+The following describes what happens when `HelloWorldL1.helloL2World()` calls through a proxy to receive `"World"` from an L2 contract.
+
+1. The off-chain sequencer pre-computes the L2 execution trace, produces an `ExecutionEntry` committing to `returnData = abi.encode("World")` and the correct state root transition, and generates a proof.
+2. `postAndVerifyBatch` verifies the proof, marks rollup ID 1 as verified for the current block, and loads the entry into the persistent queue.
+3. `HelloWorldL1.helloL2World()` calls the `CrossChainProxy` for `(HelloWorldL2, rollupId=1)`.
+4. The proxy calls `EEZ.executeCrossChainCall(sourceAddress, callData)`. EEZ computes the `crossChainCallHash` from the six-field formula, advances the rollup's queue cursor to the next entry, checks that `entry.proxyEntryHash` matches, verifies the rolling hash (zero, since no outbound L1 calls are made), applies the state delta, and returns `entry.returnData`.
+5. `HelloWorldL1.helloL2World()` decodes the return data and returns `"World"` to its caller.
+
+On L2, in a coordinated but independent flow, the system address calls `EEZL2.executeIncomingCrossChainCall`, which loads the L2 entry and drives `HelloWorldL2.getWord()`. The rolling hash over `(CALL_BEGIN, callNumber=1)` → `(CALL_END, callNumber=1, success=true, retData=abi.encode("World"))` is verified, and execution completes.
+
+Both sides happen in the same L1 block. The L2 state root committed in the L1 entry's `StateDelta` is the ground truth — the L2 execution is the deterministic consequence of the pre-committed state transition.

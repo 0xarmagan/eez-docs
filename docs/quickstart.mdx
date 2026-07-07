@@ -1,0 +1,241 @@
+---
+title: "Quickstart: Deploy EEZ and Run a Cross-Rollup Call"
+sidebar_label: "Quickstart"
+description: "Deploy EEZ on L1 and EEZL2 on L2 using Foundry and Anvil, register a rollup, post a batch, and execute your first cross-rollup call end-to-end."
+---
+
+This guide walks you through deploying EEZ locally and running the `helloWorld` end-to-end scenario — a two-sided cross-rollup call where a contract on L1 calls `getWord()` on a contract on L2 and receives back the string `"World"` atomically in one L1 block. You'll use two local Anvil nodes to simulate L1 and L2, deploy all the necessary contracts, and drive the full execution flow.
+
+:::warning
+EEZ is early-stage and unaudited. Run these steps on local test networks only. Never use the `AcceptAllProofSystem` from the examples in any environment that handles real value.
+:::
+
+## Prerequisites
+
+Before you begin, make sure you have the following installed and available on your `PATH`:
+
+- **Foundry** (`forge`, `cast`, `anvil`) — install from [getfoundry.sh](https://getfoundry.sh)
+- **Git** and **Bash**
+- Two terminal windows (or a terminal multiplexer like `tmux`) to run two simultaneous Anvil nodes
+
+## Step 1 — Clone and build the contracts
+
+Clone the EEZ core protocol repository and compile the contracts with Foundry.
+
+```bash
+git clone https://github.com/0xarmagan/eez-core-protocol.git
+cd eez-core-protocol
+forge build
+```
+
+Verify the build succeeds with no errors before proceeding. You can run the full test suite to confirm everything is working:
+
+```bash
+forge test
+```
+
+## Step 2 — Start two local Anvil nodes
+
+Open two terminal windows and start an Anvil instance in each. Use different ports to avoid conflicts.
+
+**Terminal 1 — L1 node (port 8545):**
+
+```bash
+anvil --port 8545 --silent
+```
+
+**Terminal 2 — L2 node (port 8546):**
+
+```bash
+anvil --port 8546 --silent
+```
+
+Both nodes start with a funded default account at address `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266` with private key `0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80`. All subsequent steps use this key.
+
+Set environment variables for convenience:
+
+```bash
+export L1_RPC=http://localhost:8545
+export L2_RPC=http://localhost:8546
+export PK=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+export DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+```
+
+## Step 3 — Deploy EEZ on L1 and EEZL2 on L2
+
+The `DeployEEZL1` script deploys the core `EEZ` registry contract, a mock `AcceptAllProofSystem` (accepts every proof, for local development only), and a `Rollup` manager contract pre-configured for rollup ID 1.
+
+```bash
+L1_OUTPUT=$(forge script script/e2e/shared/DeployInfra.s.sol:DeployEEZL1 \
+  --rpc-url $L1_RPC \
+  --broadcast \
+  --private-key $PK 2>&1)
+
+echo "$L1_OUTPUT"
+
+export ROLLUPS=$(echo "$L1_OUTPUT" | grep "ROLLUPS=" | sed 's/.*ROLLUPS=//' | awk '{print $1}')
+export PROOF_SYSTEM=$(echo "$L1_OUTPUT" | grep "PROOF_SYSTEM=" | sed 's/.*PROOF_SYSTEM=//' | awk '{print $1}')
+export L2_ROLLUP_MGR=$(echo "$L1_OUTPUT" | grep "L2_MANAGER=" | sed 's/.*L2_MANAGER=//' | awk '{print $1}')
+
+echo "EEZ (L1):         $ROLLUPS"
+echo "Proof System:     $PROOF_SYSTEM"
+echo "L2 Rollup Mgr:    $L2_ROLLUP_MGR"
+```
+
+The `DeployEEZL1` script registers the L2 rollup automatically. The first registered rollup always receives rollup ID 1 (ID 0 is reserved for L1 mainnet itself).
+
+Now deploy the `EEZL2` contract on the L2 node. This contract receives system-loaded execution tables from the sequencer (your `DEPLOYER` address acts as the system address in local testing):
+
+```bash
+L2_OUTPUT=$(forge script script/e2e/shared/DeployInfra.s.sol:DeployManagerL2 \
+  --rpc-url $L2_RPC \
+  --broadcast \
+  --private-key $PK \
+  --sig "run(uint256,address)" 1 $DEPLOYER 2>&1)
+
+echo "$L2_OUTPUT"
+export MANAGER_L2=$(echo "$L2_OUTPUT" | grep "MANAGER_L2=" | sed 's/.*MANAGER_L2=//' | awk '{print $1}')
+echo "EEZL2 (L2): $MANAGER_L2"
+```
+
+## Step 4 — Register the rollup (already done by DeployEEZL1)
+
+The `DeployEEZL1` script handles registration for you in the quickstart, but it's worth understanding what `registerRollup` does so you can replicate it for your own rollup.
+
+Before calling `registerRollup`, deploy a `Rollup` manager contract that specifies:
+- The EEZ registry address
+- The initial owner
+- The M-of-N proof threshold
+- An array of allowed proof system addresses and their verification keys
+
+```solidity
+address[] memory proofSystems = new address[](1);
+proofSystems[0] = address(myProofSystem);
+
+bytes32[] memory vkeys = new bytes32[](1);
+vkeys[0] = keccak256("my-verification-key");
+
+Rollup manager = new Rollup(
+    address(eez),    // EEZ registry
+    msg.sender,      // owner
+    1,               // threshold: require 1-of-1
+    proofSystems,
+    vkeys
+);
+```
+
+Then register the manager with the EEZ registry. The call is permissionless — anyone can register a new rollup:
+
+```solidity
+uint256 rollupId = eez.registerRollup(address(manager), initialStateRoot);
+// rollupId == 1 for the first registered rollup
+```
+
+EEZ calls `manager.rollupContractRegistered(rollupId)` as a one-shot init callback so the manager learns its assigned ID. After this call, your rollup is live in the registry.
+
+Verify the registration on-chain:
+
+```bash
+cast call $ROLLUPS "rollups(uint256)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
+# Returns: (managerAddress, initialStateRoot, etherBalance)
+# e.g.    (0x5FbDB...,     0xabcd...,           0)
+```
+
+## Step 5 — Deploy the Hello World contracts
+
+The Hello World scenario uses two contracts: `HelloWorldL1` on L1 (calls the L2 contract through the proxy) and `HelloWorldL2` on L2 (returns a greeting string). Deploy `HelloWorldL2` on L2 first so you have its address before deploying the L1 side:
+
+```bash
+L2_HW_OUTPUT=$(forge script script/e2e/helloWorld/E2E.s.sol:DeployL2 \
+  --rpc-url $L2_RPC \
+  --broadcast \
+  --private-key $PK 2>&1)
+
+export HELLO_WORLD_L2=$(echo "$L2_HW_OUTPUT" | grep "HELLO_WORLD_L2=" | sed 's/.*HELLO_WORLD_L2=//' | awk '{print $1}')
+echo "HelloWorldL2: $HELLO_WORLD_L2"
+```
+
+Next deploy the L1 side. The `Deploy` script creates the CrossChainProxy for `HelloWorldL2` on L1 (a deterministic CREATE2 address) and deploys `HelloWorldL1` pointing to that proxy:
+
+```bash
+L1_HW_OUTPUT=$(ROLLUPS=$ROLLUPS HELLO_WORLD_L2=$HELLO_WORLD_L2 \
+  forge script script/e2e/helloWorld/E2E.s.sol:Deploy \
+  --rpc-url $L1_RPC \
+  --broadcast \
+  --private-key $PK 2>&1)
+
+export HELLO_WORLD_PROXY=$(echo "$L1_HW_OUTPUT" | grep "HELLO_WORLD_PROXY=" | sed 's/.*HELLO_WORLD_PROXY=//' | awk '{print $1}')
+export HELLO_WORLD_L1=$(echo "$L1_HW_OUTPUT" | grep "HELLO_WORLD_L1=" | sed 's/.*HELLO_WORLD_L1=//' | awk '{print $1}')
+echo "Proxy:        $HELLO_WORLD_PROXY"
+echo "HelloWorldL1: $HELLO_WORLD_L1"
+```
+
+## Step 6 — Post a batch via `postAndVerifyBatch`
+
+The `Execute` script constructs the `ProofSystemBatchPerVerificationEntries` struct, posts it on L1, and immediately calls `HelloWorldL1.helloL2World()` to consume the entry. The batch contains one execution entry for rollup ID 1 with:
+
+- A `StateDelta` that advances the L2 state root from `keccak256("l2-initial-state")` to `keccak256("l2-state-after-helloworld")`
+- A `proxyEntryHash` committing to the exact cross-chain call hash
+- `returnData: abi.encode("World")` — the pre-committed return value
+- `rollingHash: bytes32(0)` — zero because this entry makes no outbound calls on L1
+
+```bash
+ROLLUPS=$ROLLUPS \
+PROOF_SYSTEM=$PROOF_SYSTEM \
+HELLO_WORLD_L2=$HELLO_WORLD_L2 \
+HELLO_WORLD_L1=$HELLO_WORLD_L1 \
+  forge script script/e2e/helloWorld/E2E.s.sol:Execute \
+  --rpc-url $L1_RPC \
+  --broadcast \
+  --private-key $PK 2>&1
+```
+
+You should see output similar to:
+
+```text
+== Logs ==
+  done
+  greeting=World
+```
+
+The `greeting=World` line confirms that `HelloWorldL1.helloL2World()` successfully called through the proxy, consumed the execution entry from the queue, and returned `"World"` — all within the same L1 block as `postAndVerifyBatch`.
+
+## Step 7 — Execute the L2 side
+
+The L2 node's system address (your deployer in local testing) drives the L2 execution independently. Call `ExecuteL2` to simulate the system loading and executing the L2 entry via `EEZL2.executeIncomingCrossChainCall`:
+
+```bash
+MANAGER_L2=$MANAGER_L2 \
+HELLO_WORLD_L2=$HELLO_WORLD_L2 \
+HELLO_WORLD_L1=$HELLO_WORLD_L1 \
+  forge script script/e2e/helloWorld/E2E.s.sol:ExecuteL2 \
+  --rpc-url $L2_RPC \
+  --broadcast \
+  --private-key $PK 2>&1
+```
+
+This call atomically loads the L2 execution entry and drives `HelloWorldL2.getWord()`, verifying the rolling hash that covers the call result `abi.encode("World")`. The L2 side is independent of the L1 side — in a real deployment both happen in coordinated blocks.
+
+## What just happened?
+
+## Step 1 — Off-chain pre-computation
+
+The E2E script pre-computed the full execution trace: what calls to make on L2, what return data to expect, and what the resulting state root would be. This is the job of the rollup sequencer node in production.
+
+## Step 2 — On-chain proof verification
+
+`postAndVerifyBatch` verified the proof from `AcceptAllProofSystem`, confirmed the public inputs hash covered every entry and lookup call, marked rollup ID 1 as verified for the current block, and loaded the execution entry into the transient queue.
+
+## Step 3 — Cross-chain call execution
+
+`HelloWorldL1.helloL2World()` called the CrossChainProxy, which forwarded to `EEZ.executeCrossChainCall`. The registry consumed the queued entry, checked the `proxyEntryHash` matched the call hash, verified the rolling hash, applied the state delta, and returned `abi.encode("World")`.
+
+## Step 4 — L2 execution
+
+The system address on L2 loaded the L2 entry into `EEZL2` and drove `HelloWorldL2.getWord()`. The L2 contract returned `"World"`, the rolling hash was verified, and the execution completed.
+
+## Next steps
+
+- Read the [Architecture](/architecture) page to understand how the contracts relate to each other
+- Follow the [Register a Rollup](pathname:///guides/register-rollup) guide for a production-ready registration flow
+- Browse the [EEZ Contract Reference](/contracts/eez) for the full function and event catalogue
