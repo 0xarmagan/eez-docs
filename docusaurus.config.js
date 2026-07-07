@@ -12,7 +12,7 @@ import {themes as prismThemes} from 'prism-react-renderer';
 const config = {
   title: 'Ethereum Economic Zone',
   tagline: 'EEZ enables atomic cross-chain calls between Ethereum rollups in a single L1 block.',
-  favicon: 'img/favicon.svg',
+  favicon: 'img/01-mark-on-black.png',
 
   // Future flags, see https://docusaurus.io/docs/api/docusaurus-config#future
   future: {
