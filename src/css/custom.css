@@ -28,3 +28,19 @@
   --ifm-color-primary-lightest: #E0E7FF;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.3);
 }
+
+/*
+ * Docusaurus's Mermaid `themeVariables` are shared across light/dark mode
+ * (there's no way to set them per-color-scheme), so text/line colors tuned
+ * for a light background become nearly invisible in dark mode wherever
+ * Mermaid renders on a transparent background (e.g. message labels between
+ * lifelines, not inside a filled box). Fix: always render the diagram on an
+ * explicit light card, regardless of site theme, instead of relying on a
+ * transparent SVG background.
+ */
+.docusaurus-mermaid-container {
+  background: #FAFAFF;
+  border: 1px solid #C7D2FE;
+  border-radius: 8px;
+  padding: 1.5rem 1rem;
+}
