@@ -143,8 +143,6 @@ The typical use case is a call that ran successfully on the destination chain bu
 
 The following describes what happens when `HelloWorldL1.helloL2World()` calls through a proxy to receive `"World"` from an L2 contract.
 
-<ExecutionFlowDiagram />
-
 1. The off-chain sequencer pre-computes the L2 execution trace, produces an `ExecutionEntry` committing to `returnData = abi.encode("World")` and the correct state root transition, and generates a proof.
 2. `postAndVerifyBatch` verifies the proof, marks rollup ID 1 as verified for the current block, and loads the entry into the persistent queue.
 3. `HelloWorldL1.helloL2World()` calls the `CrossChainProxy` for `(HelloWorldL2, rollupId=1)`.
