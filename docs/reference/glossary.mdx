@@ -10,13 +10,13 @@ This glossary is the single source of truth for EEZ terminology. When a term fir
 
 A `uint256` identifier assigned by the [`EEZ`](/contracts/eez) registry when a rollup calls `registerRollup`. Every cross-chain call, execution entry, state delta, and proxy identity is keyed by `rollupId`.
 
-- **`rollupId == 0` is the mainnet sentinel** (`MAINNET_ROLLUP_ID`). L1 itself is always `0` in every cross-chain call hash computation. You **cannot** register a rollup with ID `0`, cannot create a [`CrossChainProxy`](#crosschainproxy) whose `originalRollupId` is `0`, and cannot construct an [`EEZL2`](pathname:///contracts/eezl2) with `_rollupId == 0` (constructor reverts `InvalidRollupId`).
+- **`rollupId == 0` is the mainnet sentinel** (`MAINNET_ROLLUP_ID`). L1 itself is always `0` in every cross-chain call hash computation. You **cannot** register a rollup with ID `0`, cannot create a [`CrossChainProxy`](#crosschainproxy) whose `originalRollupId` is `0`, and cannot construct an [`EEZL2`](/contracts/eezl2) with `_rollupId == 0` (constructor reverts `InvalidRollupId`).
 - **Registered rollup IDs start at `1`** and are assigned sequentially in the order rollups are registered.
 - Once assigned, a `rollupId` is permanent — the manager address bound to it in the registry is immutable.
 
 ## System address
 
-The privileged, node-controlled address hard-coded as an immutable on every [`EEZL2`](pathname:///contracts/eezl2) deployment. It is the **only** address permitted to call `loadExecutionTable` and `executeIncomingCrossChainCall` — the two functions that install a new L2 execution table.
+The privileged, node-controlled address hard-coded as an immutable on every [`EEZL2`](/contracts/eezl2) deployment. It is the **only** address permitted to call `loadExecutionTable` and `executeIncomingCrossChainCall` — the two functions that install a new L2 execution table.
 
 - Never has a human-accessible private key. It is assumed to be driven by the rollup node's block-production logic.
 - Never reachable via reentrant proxy paths, so the execution table cannot be swapped or wiped mid-execution by an attacker.
@@ -24,7 +24,7 @@ The privileged, node-controlled address hard-coded as an immutable on every [`EE
 
 ## ExecutionEntry
 
-The central pre-computed record for a single cross-chain interaction. Every entry carries a flat call array, expected reentrant call table, expected lookup table, state deltas, pre-computed return data, and the expected [`rollingHash`](#rollinghash). See [Build Entries](/guides/build-execution-entries) for the field-by-field breakdown and [Data Types](pathname:///contracts/data-types) for the raw struct.
+The central pre-computed record for a single cross-chain interaction. Every entry carries a flat call array, expected reentrant call table, expected lookup table, state deltas, pre-computed return data, and the expected [`rollingHash`](#rollinghash). See [Build Entries](/guides/build-execution-entries) for the field-by-field breakdown and [Data Types](/contracts/data-types) for the raw struct.
 
 An entry's `proxyEntryHash` determines how it is consumed:
 
@@ -42,7 +42,7 @@ Both modes enforce identical proof, state-root, and rolling-hash invariants; the
 
 ## RollingHash
 
-A single `bytes32` accumulator that chains every call outcome and every reentrant nesting boundary through a tagged Keccak fold. Each [`ExecutionEntry`](#executionentry) and each [`LookupCall`](pathname:///contracts/data-types) carries an expected `rollingHash`; execution replays every call, accumulates the same four tagged events (`CALL_BEGIN`, `CALL_END`, `NESTED_BEGIN`, `NESTED_END`) into `_rollingHash`, and reverts `RollingHashMismatch` on any divergence.
+A single `bytes32` accumulator that chains every call outcome and every reentrant nesting boundary through a tagged Keccak fold. Each [`ExecutionEntry`](#executionentry) and each [`LookupCall`](/contracts/data-types) carries an expected `rollingHash`; execution replays every call, accumulates the same four tagged events (`CALL_BEGIN`, `CALL_END`, `NESTED_BEGIN`, `NESTED_END`) into `_rollingHash`, and reverts `RollingHashMismatch` on any divergence.
 
 Wrong return data, an extra call, a missing callback, or reordered operations all change the final hash. This is the primary integrity guarantee that lets EEZ safely execute a pre-committed off-chain simulation on-chain. See [Rolling Hash](/concepts/rolling-hash) for the exact accumulator formulas.
 
@@ -50,7 +50,7 @@ Wrong return data, an extra call, a missing callback, or reordered operations al
 
 A lightweight CREATE2 contract that stands in for exactly one `(originalAddress, originalRollupId)` pair on the local chain. Every contract on every chain sees the same proxy address for the same remote identity, so `msg.sender`-based access control works across rollups just as it does same-chain.
 
-- Deployed by `createCrossChainProxy(originalAddress, originalRollupId)` on [`EEZ`](/contracts/eez) or [`EEZL2`](pathname:///contracts/eezl2); the address is fully deterministic and can be pre-computed with `computeCrossChainProxyAddress`.
+- Deployed by `createCrossChainProxy(originalAddress, originalRollupId)` on [`EEZ`](/contracts/eez) or [`EEZL2`](/contracts/eezl2); the address is fully deterministic and can be pre-computed with `computeCrossChainProxyAddress`.
 - Detects `STATICCALL` context via an EIP-1153 `tstore` self-call trick and routes to `staticCallLookup` instead of `executeCrossChainCall` when it is inside a read-only frame.
 - Cannot represent an address on its own chain — `originalRollupId == 0` on L1 or `originalRollupId == ROLLUP_ID` on L2 reverts `SameNetworkProxy`.
 

@@ -12,6 +12,16 @@ const sidebarsContracts = {
       label: 'L1 Contracts',
       items: ['eez', 'rollup', 'bridge'],
     },
+    {
+      type: 'category',
+      label: 'L2 Contracts',
+      items: ['eezl2'],
+    },
+    {
+      type: 'category',
+      label: 'Data Types',
+      items: ['data-types'],
+    },
   ],
 };
 
