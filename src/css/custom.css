@@ -30,17 +30,18 @@
 }
 
 /*
- * Docusaurus's Mermaid `themeVariables` are shared across light/dark mode
- * (there's no way to set them per-color-scheme), so text/line colors tuned
- * for a light background become nearly invisible in dark mode wherever
- * Mermaid renders on a transparent background (e.g. message labels between
- * lifelines, not inside a filled box). Fix: always render the diagram on an
- * explicit light card, regardless of site theme, instead of relying on a
- * transparent SVG background.
+ * EEZ brand diagrams are a fixed green-on-black "schematic" panel (see
+ * docusaurus.config.js mermaid themeVariables) — deliberately independent
+ * of the site's own light/dark toggle, matching the brand deck's motion
+ * grammar for cross-chain flows. This also avoids the readability trap of
+ * Mermaid's shared-across-modes themeVariables: colors tuned for one
+ * background go nearly invisible against the other, so the panel brings
+ * its own permanent dark background instead of relying on a transparent
+ * SVG background.
  */
 .docusaurus-mermaid-container {
-  background: #FAFAFF;
-  border: 1px solid #C7D2FE;
+  background: #0A0A0A;
+  border: 1px solid rgba(59, 229, 126, 0.25);
   border-radius: 8px;
   padding: 1.5rem 1rem;
 }

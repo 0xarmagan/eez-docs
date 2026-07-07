@@ -1,30 +1,37 @@
-**Phase 1 — L1: prove, queue, execute the call.** The sequencer pre-computes the trace and proof, EEZ verifies and queues it, then `HelloWorldL1`'s call routes through the proxy and back:
+At a glance, every cross-rollup call goes through three stages:
 
 ```mermaid
-sequenceDiagram
-    participant Seq as Off-chain Sequencer
-    participant EEZ as EEZ Registry
-    participant Proxy as CrossChainProxy
-    participant AppL1 as HelloWorldL1
-
-    Seq->>EEZ: postAndVerifyBatch()
-    Note right of EEZ: Verify proof, queue entry
-    AppL1->>Proxy: helloL2World()
-    Proxy->>EEZ: executeCrossChainCall()
-    Note right of EEZ: Verify hash, apply delta
-    EEZ-->>Proxy: "World"
-    Proxy-->>AppL1: "World"
+flowchart LR
+    A["Off-chain\nprove & queue"] --> B["L1\nexecute the call"]
+    B --> C["L2\nexecute independently"]
+    style A fill:#0d1f16,stroke:#3BE57E,stroke-width:2px,color:#F2F2EC
+    style B fill:#122b1d,stroke:#3BE57E,stroke-width:2px,color:#F2F2EC
+    style C fill:#17361f,stroke:#3BE57E,stroke-width:2px,color:#F2F2EC
 ```
 
-**Phase 2 — L2: same L1 block, executed independently.** The system address drives the L2 side of the same call, verified against its own rolling hash:
+The full call, contract by contract, for `HelloWorldL1.helloL2World()` calling through to `HelloWorldL2.getWord()`:
 
 ```mermaid
-sequenceDiagram
-    participant Seq as Off-chain Sequencer
-    participant EEZL2 as EEZL2
-    participant AppL2 as HelloWorldL2
+flowchart TD
+    Seq(["Off-chain Sequencer"])
+    EEZ["EEZ Registry (L1)"]
+    Proxy["CrossChainProxy (L1)"]
+    App1["HelloWorldL1"]
+    EEZL2["EEZL2 (L2)"]
+    App2["HelloWorldL2"]
 
-    Seq->>EEZL2: executeIncomingCrossChainCall()
-    EEZL2->>AppL2: getWord()
-    AppL2-->>EEZL2: "World"
+    Seq -->|postAndVerifyBatch| EEZ
+    App1 -->|helloL2World| Proxy
+    Proxy -->|executeCrossChainCall| EEZ
+    EEZ -.->|World| Proxy
+    Proxy -.->|World| App1
+    Seq -->|executeIncomingCrossChainCall| EEZL2
+    EEZL2 -->|getWord| App2
+    App2 -.->|World| EEZL2
+
+    linkStyle 3 stroke:#A8F3CE,color:#A8F3CE
+    linkStyle 4 stroke:#A8F3CE,color:#A8F3CE
+    linkStyle 7 stroke:#A8F3CE,color:#A8F3CE
 ```
+
+Solid green arrows are calls, dashed mint arrows are returns (mint marks a settled/proven value in the EEZ visual grammar). `EEZ.postAndVerifyBatch()` verifies the proof and queues the entry; `EEZ.executeCrossChainCall()` checks the hash and applies the state delta. Both sides happen in the same L1 block — see [Execution flow: a complete example](#execution-flow-a-complete-example) below for the step-by-step breakdown.
