@@ -61,3 +61,27 @@ See [Cross-Chain Proxy](/concepts/cross-chain-proxy) for the full formula and ro
 A rollup whose sequencing is inherited from Ethereum L1 — that is, the L1 validator set determines the order in which L2 blocks are proposed. Because all based rollups share the same sequencing venue, their state transitions can be committed to L1 in a single block, which is the property EEZ exploits to deliver **synchronous** cross-rollup composability.
 
 EEZ is designed with based rollups as its primary target audience. Non-based rollups can still integrate but lose the same-block atomicity guarantee unless they align their block production with L1.
+
+## Meta hook
+
+The callback interface ([`IMetaCrossChainReceiver`](/contracts/interfaces/imetacrosschainreceiver)) that EEZ invokes on `msg.sender` after `postAndVerifyBatch` loads the transient execution table, if `msg.sender` is a contract with unconsumed transient entries. It gives the batch submitter a chance to consume transient entries — via cross-chain proxy calls — in the same transaction that posted the batch, which is what makes fully synchronous, single-transaction cross-chain composability possible.
+
+- Implementing the hook is optional; skip it if you only need persistent (deferred) consumption in separate transactions.
+- The registry does not enforce that every transient entry is consumed inside the hook — anything left unconsumed when it returns is simply never executed.
+- If the hook implementation reverts, the entire `postAndVerifyBatch` call reverts with it.
+
+See [IMetaCrossChainReceiver](/contracts/interfaces/imetacrosschainreceiver) for the full callback contract and a worked settlement example.
+
+## Revert span
+
+A field (`revertSpan`) on each call (`L2ToL1Call` on L1, `CrossChainCall` on L2) that marks calls whose EVM state effects must be rolled back even though the calls themselves succeed. Setting `revertSpan = N` causes EEZ to execute the next `N` calls, capture their results in the [rolling hash](#rollinghash) as normal, and then roll back all their EVM state changes — distinct from a naturally-reverting call, which captures `(false, returnData)` instead.
+
+Typical use case: a call that ran successfully on the destination chain but whose effects need to be undone on the source chain's view (for example, a collateral check that passed on L2 but shouldn't persist on L1). See [Architecture](/architecture#revert-span-and-forced-revert-execution) for the full mechanics.
+
+## StateDelta
+
+The struct describing one rollup's state transition caused by executing one [`ExecutionEntry`](#executionentry): a `rollupId`, the `currentState` root expected before the entry applies (checked on-chain, reverts `StateRootMismatch` on mismatch), the `newState` root to write after, and a signed `etherDelta` for the rollup's ETH balance change. This content-addressing is what prevents a stale or reordered entry from silently applying to the wrong chain state. See [Data Types](/contracts/data-types#statedelta) for the raw struct and field table.
+
+## AcceptAllProofSystem
+
+A mock proof system, used only in the [Quickstart](/quickstart)'s local examples, that accepts every proof unconditionally. It exists purely to let you exercise the full `postAndVerifyBatch` → proxy → execution flow on local Anvil nodes without standing up a real prover. **Never use it outside local test networks** — it provides no actual verification guarantee, so any deployment relying on it accepts proofs from anyone for anything.
