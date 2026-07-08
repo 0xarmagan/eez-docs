@@ -21,7 +21,7 @@ flowchart LR
     App2("HelloWorldL2")
 
     Seq -->|postAndVerifyBatch| EEZ
-    App1 -->|helloL2World| Proxy
+    App1 -->|getWord| Proxy
     Proxy -->|executeCrossChainCall| EEZ
     EEZ -.->|World| Proxy
     Proxy -.->|World| App1
