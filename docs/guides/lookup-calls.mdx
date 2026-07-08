@@ -23,6 +23,15 @@ EEZ has two distinct lookup structs that live in two different places, each serv
 
 This split is what makes lookups **entry-scoped by construction**. A nested `ExpectedLookup` can only be resolved from the specific execution entry (or top-level lookup sub-execution) that owns it — there is no shared queue to pollute, no cross-entry collision, and no cross-rollup routing concern.
 
+```mermaid
+flowchart LR
+    S("A STATICCALL crosses\na rollup boundary") --> Where{"Inside an active\nexecution entry?"}
+    Where -->|yes| Nested("ExpectedLookup\nnested, lives in the entry")
+    Where -->|no| Top("LookupCall\ntop-level, storage pool")
+    Nested --> NestedKey("Matched by:\ncrossChainCallHash + 3 cursor fields")
+    Top --> TopKey("Matched by:\ncrossChainCallHash + state-root pins L1")
+```
+
 ## ExpectedLookup: Nested Lookups (In-Entry)
 
 Use an `ExpectedLookup` when a contract performs a cross-chain read or a `try/catch`-wrapped reverting call **while an execution entry is already being processed**.

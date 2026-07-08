@@ -60,6 +60,23 @@ Threshold enforcement is handled entirely by the manager contract's `checkProofS
 The central `EEZ` registry never reads the threshold separately. All threshold semantics live inside `checkProofSystemsAndGetVkeys`. This means a custom manager can implement any threshold model — including time-weighted quorums, governance-driven thresholds, or progressive decentralization schemes — without any changes to EEZ itself.
 :::
 
+At a glance, for a batch touching two rollups with different accepted proof systems:
+
+```mermaid
+flowchart LR
+    RA("Rollup A\nthreshold = 2") --> ReqA("accepts: PS0, PS2")
+    RB("Rollup B\nthreshold = 2") --> ReqB("accepts: PS1, PS2")
+    ReqA --> Batch(["postAndVerifyBatch\none proof per required system"])
+    ReqB --> Batch
+    Batch --> Check{"checkProofSystemsAndGetVkeys\nall proofs verify?"}
+    Check -->|yes| Queue("Queues populated\nfor Rollup A and B")
+    Check -->|no| Revert("Entire batch reverts")
+
+    style Queue fill:#0f2a1e,stroke:#A8F3CE,color:#F2F2EC
+    style Revert fill:#1f1a12,stroke:#8B7B55,color:#F2F2EC
+    linkStyle 6 stroke:#8B7B55,color:#8B7B55
+```
+
 ## How `checkProofSystemsAndGetVkeys` Works in a Batch
 
 When you submit a batch via `postAndVerifyBatch`, you provide:

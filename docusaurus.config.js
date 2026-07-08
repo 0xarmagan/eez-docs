@@ -42,6 +42,8 @@ const config = {
   },
   themes: ['@docusaurus/theme-mermaid'],
 
+  clientModules: [require.resolve('./src/clientModules/mermaidWidthFix.js')],
+
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you
   // may want to replace "en" with "zh-Hans".
@@ -100,7 +102,7 @@ const config = {
             lineColor: '#3BE57E',
             secondaryColor: '#0d1f16',
             tertiaryColor: '#0d1f16',
-            fontFamily: 'inherit',
+            fontFamily: 'Inter, -apple-system, sans-serif',
           },
         },
       },

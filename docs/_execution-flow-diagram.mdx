@@ -2,8 +2,8 @@ At a glance, every cross-rollup call goes through three stages:
 
 ```mermaid
 flowchart LR
-    A["Off-chain\nprove & queue"] --> B["L1\nexecute the call"]
-    B --> C["L2\nexecute independently"]
+    A("Off-chain\nprove & queue") --> B("L1\nexecute the call")
+    B --> C("L2\nexecute independently")
     style A fill:#0d1f16,stroke:#3BE57E,stroke-width:2px,color:#F2F2EC
     style B fill:#122b1d,stroke:#3BE57E,stroke-width:2px,color:#F2F2EC
     style C fill:#17361f,stroke:#3BE57E,stroke-width:2px,color:#F2F2EC
@@ -12,13 +12,13 @@ flowchart LR
 The full call, contract by contract, for `HelloWorldL1.helloL2World()` calling through to `HelloWorldL2.getWord()`:
 
 ```mermaid
-flowchart TD
+flowchart LR
     Seq(["Off-chain Sequencer"])
-    EEZ["EEZ Registry (L1)"]
-    Proxy["CrossChainProxy (L1)"]
-    App1["HelloWorldL1"]
-    EEZL2["EEZL2 (L2)"]
-    App2["HelloWorldL2"]
+    EEZ("EEZ Registry (L1)")
+    Proxy("CrossChainProxy (L1)")
+    App1("HelloWorldL1")
+    EEZL2("EEZL2 Manager")
+    App2("HelloWorldL2")
 
     Seq -->|postAndVerifyBatch| EEZ
     App1 -->|helloL2World| Proxy

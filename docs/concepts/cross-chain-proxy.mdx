@@ -68,6 +68,19 @@ When a contract calls a proxy (directly or through its `fallback` function), the
 
 The decision hinges on whether the current EVM frame is inside a `STATICCALL`. Since Solidity has no built-in way to introspect that, the proxy uses a clever detection trick described below.
 
+Routing at a glance:
+
+```mermaid
+flowchart LR
+    Call("Call arrives at\nCrossChainProxy") --> Probe{"tstore probe:\nstatic call context?"}
+    Probe -->|"no, regular CALL"| Exec(["Execute path\nexecuteCrossChainCall"])
+    Probe -->|yes| Look("Lookup path\nstaticCallLookup")
+    Exec --> ExecDetail("Runs the queued entry,\napplies state deltas")
+    Look --> LookDetail("Returns cached result,\nno state changes")
+
+    style LookDetail fill:#0f2a1e,stroke:#A8F3CE,color:#F2F2EC
+```
+
 ## STATICCALL Detection
 
 The proxy needs to know whether it is being called in a `STATICCALL` context so it can pick the right route. Solidity offers no direct primitive for this, so `CrossChainProxy` uses an **EIP-1153 transient-storage probe**:

@@ -30,6 +30,19 @@
 }
 
 /*
+ * Real EEZ brand typeface (from the design system's colors_and_type.css),
+ * self-hosted so diagram labels render in the actual brand font instead of
+ * a generic system-ui fallback.
+ */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url('/fonts/Inter-Variable.woff2') format('woff2-variations');
+}
+
+/*
  * EEZ brand diagrams are a fixed green-on-black "schematic" panel (see
  * docusaurus.config.js mermaid themeVariables) — deliberately independent
  * of the site's own light/dark toggle, matching the brand deck's motion
@@ -44,4 +57,19 @@
   border: 1px solid rgba(59, 229, 126, 0.25);
   border-radius: 8px;
   padding: 1.5rem 1rem;
+  overflow-x: auto;
+}
+
+/*
+ * Horizontal diagrams (flowchart LR) are naturally wider than the content
+ * column. The mermaid SVG has `width="100%"` and no height attribute — only
+ * a viewBox — so per the CSS replaced-element sizing algorithm even
+ * `width: auto` resolves to the containing block's width, not the SVG's own
+ * size. Lifting the max-width cap here is necessary but not sufficient; the
+ * actual pixel width is set from the viewBox by src/clientModules/
+ * mermaidWidthFix.js (must NOT use !important here — it would override that
+ * script's inline width).
+ */
+.docusaurus-mermaid-container svg {
+  max-width: none !important;
 }
