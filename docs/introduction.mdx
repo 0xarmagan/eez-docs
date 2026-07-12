@@ -5,23 +5,53 @@ description: "EEZ is an early-stage Ethereum protocol enabling atomic, synchrono
 slug: /
 ---
 
-import UnauditedWarning from './_unaudited-warning.mdx'
+import DiagramMotion from '@site/src/components/DiagramMotion';
+import {Card, CardGrid} from '@site/src/components/Cards';
 
-<UnauditedWarning />
+# Ethereum Economic Zone
 
-Ethereum Economic Zone is a smart contract protocol for synchronous composability between Ethereum rollups. Today, cross-rollup logic runs through lock-and-mint bridges, oracle messaging, or relayers — all multi-block, all with their own trust assumptions. Because [based rollups](/reference/glossary#based-rollup) share Ethereum's L1 sequencer, EEZ can instead pre-compute a cross-rollup call's full outcome off-chain, verify it on-chain with a proof, and execute it atomically in a single L1 block — a contract on one rollup calls a contract on another and gets the return value in the same transaction, as if both lived on the same chain.
+**A contract on one rollup calls a contract on another and gets the return value in the same L1 block** — atomic cross-rollup composability, verified on-chain. No lock-and-mint bridges, oracles, or relayers in the path.
 
-## How it works, in brief
+<DiagramMotion
+  src="/motion/what-is-eez.webm"
+  poster="/motion/what-is-eez-poster.png"
+  alt="A cross-chain call in EEZ is a normal Ethereum CALL, then a RETURN, between smart contracts on different chains."
+  caption="A cross-chain interaction is a normal Ethereum CALL → RETURN — proxies, not bridges."
+/>
 
-A batch of [`ExecutionEntry`](/reference/glossary#executionentry) records — each committing to a full cross-rollup call including calls, returns, and state deltas — is posted to L1 via `postAndVerifyBatch` and verified by a per-rollup [multi-prover configuration](/concepts/multi-prover). Verified entries land in per-rollup queues as either [transient or deferred](/reference/glossary#transient-vs-deferred) work, and are consumed in the same L1 block through [`CrossChainProxy`](/concepts/cross-chain-proxy) contracts that preserve `msg.sender` identity across chains. Every entry carries a [`rollingHash`](/concepts/rolling-hash) that catches any deviation from the pre-committed execution. See the [Architecture](/architecture) page for the full call-flow diagram.
+:::caution
+Early-stage and **not audited** — interfaces and storage layout are still in flux. Not for production use.
+:::
 
-## Who should use EEZ?
+## Choose your path
 
-- **Rollup operators** building based rollups: register with EEZ to expose your rollup to the composability network.
-- **DApp developers** building cross-rollup apps (unified DEX liquidity, cross-chain lending, atomic NFT swaps, [cross-rollup flash loans](/guides/flash-loans)): use EEZ's execution model to write cross-chain logic as naturally as same-chain calls.
-- **Protocol researchers** studying synchronous composability, based sequencing, and multi-prover verification: EEZ is a concrete implementation to read, extend, and critique.
+<CardGrid columns={3}>
+  <Card to="/guides/register-rollup" icon="🛠" eyebrow="Rollup operators" title="Register your rollup" cta="Register Rollup">
+    Expose your based rollup to the composability network so other rollups can call into it.
+  </Card>
+  <Card to="/quickstart" icon="🧩" eyebrow="dApp developers" title="Build cross-rollup apps" cta="Quickstart">
+    Write cross-chain logic — DEX liquidity, lending, flash loans — as naturally as a same-chain call.
+  </Card>
+  <Card to="/architecture" icon="🔬" eyebrow="Protocol researchers" title="Study the design" cta="Architecture">
+    A concrete implementation of synchronous composability and multi-prover verification to read and critique.
+  </Card>
+</CardGrid>
 
-If you're new to the protocol, start with the [Quickstart](/quickstart) to deploy and run a cross-chain call locally, then read the [Architecture](/architecture) page for a full picture of how the contracts fit together.
+### New here? Start with one of these
 
-- **[Quickstart](/quickstart)** — Run a cross-rollup hello world in under 15 minutes using Foundry and Anvil.
-- **[Architecture](/architecture)** — Deep-dive into the L1/L2 contract structure, queue model, and proof systems.
+<CardGrid columns={2}>
+  <Card to="/quickstart" accent title="Quickstart" cta="Run it in ~15 min">
+    Deploy and run a cross-rollup hello world locally with Foundry and Anvil.
+  </Card>
+  <Card to="/architecture" accent title="Architecture" cta="See the full picture">
+    The L1/L2 contract structure, transient/deferred queue model, proof systems, and call-flow diagram.
+  </Card>
+</CardGrid>
+
+## How EEZ works, in brief
+
+Because [based rollups](/reference/glossary#based-rollup) share Ethereum's L1 sequencer, EEZ pre-computes a cross-rollup call's outcome off-chain, proves it on-chain, and executes it atomically:
+
+- **Post & verify** — a batch of [`ExecutionEntry`](/reference/glossary#executionentry) records (each committing to a full cross-rollup call: calls, returns, and state deltas) is posted to L1 via `postAndVerifyBatch` and verified by a per-rollup [multi-prover configuration](/concepts/multi-prover).
+- **Queue** — verified entries land in per-rollup queues as either [transient or deferred](/reference/glossary#transient-vs-deferred) work.
+- **Consume** — they execute in the same L1 block through [`CrossChainProxy`](/concepts/cross-chain-proxy) contracts that preserve `msg.sender` identity across chains; every entry's [`rollingHash`](/concepts/rolling-hash) catches any deviation from the pre-committed execution.
