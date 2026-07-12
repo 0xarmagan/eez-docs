@@ -82,7 +82,7 @@ Returns the verification key for each proof system in the input array, after enf
 | --- | --- | --- |
 | `vkeys` | `bytes32[]` | The verification keys parallel to `proofSystems`. Each entry must be non-zero — **your manager** is responsible for rejecting a zero/unknown vkey rather than returning it; the reference `Rollup.sol` reverts `ProofSystemNotAllowed(ps)`. The registry does **not** inspect returned vkeys for zero. The returned array length must equal `proofSystems.length`, otherwise the registry reverts `InvalidProofSystemConfig` (a length-mismatch check only). |
 
-**When EEZ calls this:** During `postAndVerifyBatch`, in step 2 (fetch vkMatrix), before any state is mutated. The registry calls `checkProofSystemsAndGetVkeys` for each rollup participating in the batch, then builds the public input hash for each proof system.
+**When EEZ calls this:** During `postAndVerifyBatch`, in step 3 (fetch vkMatrix), before any state is mutated. The registry calls `checkProofSystemsAndGetVkeys` for each rollup participating in the batch, then builds the public input hash for each proof system.
 
 **What your implementation must do:**
 
@@ -138,7 +138,7 @@ The contents are entirely rollup-defined. Your circuit determines what L1-view i
 | --- | --- | --- |
 | `customData` | `bytes` | The opaque blob your rollup commits to. The registry folds it into `customDataAcc` keyed by this rollup's ID before building `sharedPublicInput`. Return an empty bytes value (`""`) when `blockNumber == 0`. |
 
-**When EEZ calls this:** During `postAndVerifyBatch`, in step 2 (verify), after fetching the vkMatrix but as part of building `sharedPublicInput`. Called once per rollup per batch, passing `batch.blockNumber`.
+**When EEZ calls this:** During `postAndVerifyBatch`, in step 3 (verify), after fetching the vkMatrix but as part of building `sharedPublicInput`. Called once per rollup per batch, passing `batch.blockNumber`.
 
 **What your implementation must do:**
 
