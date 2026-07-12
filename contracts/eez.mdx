@@ -468,7 +468,7 @@ function executionQueueIndex(uint256 _rollupId) external view returns (uint256)
 | `L2ExecutionPerformed(rollupId, newState)` | Emitted after an entry's state deltas are applied. |
 | `ExecutionConsumed(crossChainCallHash, rollupId, executionQueueIndex)` | Emitted when a proxy-triggered execution entry is consumed. |
 | `L2TXExecuted(rollupId, executionQueueIndex)` | Emitted when `executeL2TX` consumes an entry. |
-| `ImmediateEntrySkipped(transientIdx, revertData)` | Emitted when an immediate entry (in-line L2 transaction) reverts during `postAndVerifyBatch` step 5 (drain immediate entries). The batch continues; only that entry's state changes are rolled back. |
+| `ImmediateEntrySkipped(transientIdx, revertData)` | Emitted when an immediate entry (in-line L2 transaction) reverts during `postAndVerifyBatch` step 6 (drain immediate entries). The batch continues; only that entry's state changes are rolled back. |
 | `L1ToL2CallNotFound(entryIndex, crossChainCallHash, currentL2ToL1Call, lastL1ToL2CallConsumed)` | Emitted on the deferred no-match path when a reentrant L1→L2 call has no matching `ExpectedL1ToL2Call`. The deferred flag surfaces as `ExecutionNotFound` at the entry boundary. |
 | `CallResult(entryIndex, l2ToL1CallNumber, success, returnData)` | Emitted after each L2→L1 call completes during entry processing. Not emitted for calls inside a revert span, since those events are rolled back with the span. |
 | `L1ToL2CallConsumed(entryIndex, l1ToL2CallNumber, crossChainCallHash, callCount)` | Emitted when a reentrant L1→L2 call (`ExpectedL1ToL2Call`) is consumed during execution. |

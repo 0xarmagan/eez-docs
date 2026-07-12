@@ -27,8 +27,10 @@ Any contract that implements the following interface can be registered as a proo
 interface IProofSystem {
     /// @notice Verifies a proof against a public inputs hash.
     /// @param proof   The proof bytes (encoding is proof-system-specific).
-    /// @param publicInputsHash  A single bytes32 commitment to the batch's entries,
-    ///                          lookup calls, blobs, calldata, and per-rollup vkeys.
+    /// @param publicInputsHash  A bytes32 commitment: a shared component over the batch's
+    ///                          entries, lookup calls, blobs, calldata, and each rollup's
+    ///                          L1-view context, mixed with a per-proof-system accumulator
+    ///                          over the vkeys that proof system attests to.
     /// @return True if the proof is valid, reverts or returns false otherwise.
     function verify(bytes calldata proof, bytes32 publicInputsHash) external view returns (bool);
 }
