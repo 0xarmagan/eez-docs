@@ -5,6 +5,7 @@ description: "Understand how EEZ builds ExecutionEntry structs, partitions call 
 ---
 
 import UnauditedWarning from '../_unaudited-warning.mdx'
+import DiagramMotion from '@site/src/components/DiagramMotion';
 
 <UnauditedWarning />
 
@@ -18,6 +19,13 @@ This simulation produces two kinds of outputs:
 
 - **`ExecutionEntry` structs**: the pre-computed call plan for each cross-chain interaction.
 - **ZK proofs** (or multi-prover attestations): cryptographic evidence that each `ExecutionEntry` correctly describes the state transition for its target rollup, given those specific pre-state roots.
+
+<DiagramMotion
+  src="/motion/adstf.webm"
+  poster="/motion/adstf-poster.png"
+  alt="A chain's state transition: an action plus its initial state produce a final state, an emitted action, and optional revert info."
+  caption="The conceptual model behind each entry: a chain's state transition function takes an action and its prior state and emits a new state, an outgoing action, and any revert info. EEZ ships this as ExecutionEntry, StateDelta, and the rolling hash."
+/>
 
 ## The `ExecutionEntry`
 

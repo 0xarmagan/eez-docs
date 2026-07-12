@@ -4,6 +4,8 @@ sidebar_label: "Sync Composability"
 description: "Learn how EEZ enables atomic, same-block cross-rollup calls by pre-computing execution off-chain and replaying it deterministically on-chain."
 ---
 
+import DiagramMotion from '@site/src/components/DiagramMotion';
+
 Ethereum's rollup ecosystem fragments liquidity and composability: when your contract on one rollup calls a contract on another, you normally wait minutes or hours for a bridge message to settle, destroying the tight execution guarantees that make DeFi primitives possible. EEZ removes that wait entirely by committing to the full outcome of every cross-chain interaction before any on-chain state changes — letting you compose across rollups as freely as you compose within a single chain.
 
 ## Why Traditional Bridges Break Composability
@@ -32,6 +34,15 @@ On-chain, EEZ doesn't re-discover what happened; it replays a pre-approved scrip
 2. **Proof generation**: A ZK proof (or M-of-N multi-prover attestation) is generated, binding the execution entries to specific state roots on each rollup.
 3. **`postAndVerifyBatch`**: The L1 EEZ contract verifies the proof, loads the entries, and executes any immediate work. Deferred entries are queued per-rollup, ready for consumption in the same block.
 4. **Consumption**: When your contract calls a cross-chain proxy, the proxy forwards the call to EEZ, which replays the pre-approved entry — verifying the rolling hash at the end to confirm nothing diverged from the simulation.
+
+The reason this can stay synchronous is real-time proving: per-rollup and blob proofs are verified and aggregated into a single on-chain PLONK proof, fast enough to land inside an L1 slot.
+
+<DiagramMotion
+  src="/motion/proving-tree.webm"
+  poster="/motion/proving-tree-poster.png"
+  alt="The ZisK proving pipeline: blob proofs and per-rollup proofs are verified and aggregated level by level into one PLONK proof posted on-chain."
+  caption="ZisK real-time proving: per-chain and blob proofs aggregate into a single on-chain PLONK proof, targeting under 3 seconds so composability stays synchronous."
+/>
 
 If any call returns different data than the proof committed to, the rolling hash check fails and the entire entry reverts. You get the execution you proved, or you get nothing — no partial states, no stuck funds.
 
