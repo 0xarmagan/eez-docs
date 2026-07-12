@@ -38,7 +38,7 @@ The `WrappedToken` contract is the ERC-20 representation minted on destination c
 
 **Who can call it:** Anyone, but only once per deployment.
 
-**Emits:** `Initialized(manager, rollupId, admin)`
+**Emits:** Nothing. An `Initialized` event is declared on the contract but is **not** emitted by `initialize` in the current implementation — do not rely on it to detect setup.
 
 ```solidity
 function initialize(address _manager, uint256 _rollupId, address _admin) external
@@ -230,9 +230,9 @@ function setCanonicalBridgeAddress(address bridgeAddress) external onlyAdmin
 
 | Event | Description |
 |-------|-------------|
-| `Initialized(manager, rollupId, admin)` | Emitted once by `initialize` when the Bridge is configured. |
+| `Initialized(manager, rollupId, admin)` | Declared on the contract but **not currently emitted** — `initialize` sets state without emitting it. |
 | `CanonicalBridgeAddressSet(addr)` | Emitted when the admin overrides the canonical bridge address. |
-| `EtherBridged(sender, rollupId, amount)` | Emitted when ETH is successfully queued for bridging via `bridgeEther`. |
+| `EtherBridged(sender, rollupId, amount)` | Emitted when ETH is successfully queued for bridging via `bridgeEther`. Note: the first field is declared `sender` but the contract emits the **destination** address into it, not the caller. |
 | `TokensBridged(token, sender, rollupId, amount)` | Emitted when tokens are locked or burned for bridging via `bridgeTokens`. |
 | `TokensReleased(token, to, amount)` | Emitted when native tokens are released to a recipient via `receiveTokens`. |
 | `WrappedTokensMinted(wrappedToken, to, amount)` | Emitted when wrapped tokens are minted for a recipient via `receiveTokens`. |

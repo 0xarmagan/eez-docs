@@ -275,12 +275,12 @@ CALL_BEGIN(1)
     CALL_BEGIN(3)
     CALL_END(3, success3, returnData3)
   NESTED_END(1)
-CALL_END(1, success1, returnData1)
+CALL_END(3, success1, returnData1)
 CALL_BEGIN(4)
 CALL_END(4, success4, returnData4)
 ```
 
-The nesting is what forces the builder to simulate the full execution graph. A reentrant call fires between `CALL_BEGIN(n)` and `CALL_END(n)` of the outer call — specifically when the destination contract calls back through a proxy during its execution. `NESTED_BEGIN` records the moment the reentrant frame starts; `NESTED_END` records when it returns. `callCount` for the outer entry-level frame is 3 (calls 1, 4 at the entry level — but call 1 spans from `CALL_BEGIN(1)` to `CALL_END(1)` inclusive of the nested frame). `expectedL1ToL2Calls[0].callCount` is 2 (calls 2 and 3 inside the reentrant frame). The partition invariant `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length` becomes `2 + 2 == 4`.
+The nesting is what forces the builder to simulate the full execution graph. A reentrant call fires between `CALL_BEGIN(n)` and `CALL_END(n)` of the outer call — specifically when the destination contract calls back through a proxy during its execution. `NESTED_BEGIN` records the moment the reentrant frame starts; `NESTED_END` records when it returns. Note that `CALL_END` always tags with the *live* `_currentL2ToL1Call` cursor, not the call number captured at `CALL_BEGIN` — so the outer call's `CALL_END` reads `3`, not `1`, because the nested frame already advanced the shared cursor. `callCount` for the outer entry-level frame is 2 (calls 1 and 4 at the entry level). `expectedL1ToL2Calls[0].callCount` is 2 (calls 2 and 3 inside the reentrant frame). The partition invariant `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length` becomes `2 + 2 == 4`.
 
 ---
 

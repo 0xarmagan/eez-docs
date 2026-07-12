@@ -63,7 +63,7 @@ function _rollingHashNestedEnd(uint256 nestedNumber) internal {
 At the end of every entry, EEZ enforces:
 
 ```solidity
-require(_rollingHash == entry.rollingHash);  // otherwise reverts RollingHashMismatch()
+if (_rollingHash != entry.rollingHash) revert RollingHashMismatch();
 ```
 
 The domain tag bytes prevent an event of one kind from hashing identically to an event of another (e.g., a `CALL_END` for call #2 vs. a `NESTED_BEGIN` for frame #2).

@@ -123,6 +123,8 @@ struct LookupCall {
 
 Top-level lookups are published to the storage pool by `postAndVerifyBatch` (via `l1ToL2lookupCalls`) and are consumed when a `STATICCALL` crosses a chain boundary outside any execution. The match requires `crossChainCallHash` to match AND all `expectedStateRoots` pins to match the live `rollups[rollupId].stateRoot` for each pinned rollup.
 
+While a batch is mid-flight, top-level lookups are consumed from a single global transient pool (`_transientLookupCalls`) that is **not** routed per-rollup. In that phase the on-chain match adds a third term — `destinationRollupId` must equal the calling proxy's rollup — so a prover cannot resolve a lookup meant for a different rollup. Once the batch is persisted, lookups live in the per-rollup `lookupQueue[destinationRollupId]`, where queue routing already enforces the same guarantee.
+
 On L2, the `LookupCall` struct drops `destinationRollupId` and `expectedStateRoots` entirely (single rollup, match is by `crossChainCallHash` alone). The pool is `lookupCalls`.
 
 ### State Root Binding (L1)

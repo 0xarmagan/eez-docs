@@ -124,7 +124,7 @@ function postAndVerifyBatch(
 <details>
 <summary>executeCrossChainCall — Execute a queued cross-chain call via proxy</summary>
 
-`executeCrossChainCall` is the runtime entry point that `CrossChainProxy` contracts call into on behalf of a remote caller. When an external account calls a proxy on L1, the proxy determines whether it is in a static or non-static context, then delegates here. The function resolves the matching `ExecutionEntry` from the active execution stream (transient or persistent), applies state deltas, processes the flat call array, and returns the entry's pre-computed `returnData`. You should never call this function directly — always interact through a `CrossChainProxy`.
+`executeCrossChainCall` is the runtime entry point that `CrossChainProxy` contracts call into on behalf of a remote caller. When an external account calls a proxy on L1, the proxy determines whether it is in a static or non-static context, then delegates here. The function resolves the matching `ExecutionEntry` from the active execution stream (transient or persistent), processes the flat call array, applies state deltas, and returns the entry's pre-computed `returnData`. You should never call this function directly — always interact through a `CrossChainProxy`.
 
 **Who can call it:** Registered `CrossChainProxy` contracts only (`authorizedProxies[msg.sender].originalAddress != address(0)`).
 
@@ -171,7 +171,7 @@ function executeCrossChainCall(address sourceAddress, bytes calldata callData)
 <details>
 <summary>executeL2TX — Execute a pure L2 transaction from the deferred queue</summary>
 
-`executeL2TX` consumes the next entry from a rollup's deferred queue when that entry represents a pure L2 transaction (one with no L1-originated trigger, i.e., `proxyEntryHash == bytes32(0)`). These are transactions that the rollup executed internally — no cross-chain proxy call drove them. You can call this to finalize state-root updates and any outgoing L1 calls attached to such transactions. You cannot call this while a cross-chain execution is in progress.
+`executeL2TX` consumes the next pure-L2 entry (one with no L1-originated trigger, i.e., `proxyEntryHash == bytes32(0)`) from the active execution stream. While a `postAndVerifyBatch` batch is mid-flight (inside the meta-hook window, when the transient table is non-empty), consumption comes from the shared transient execution table via the global transient cursor; outside a batch it consumes from the rollup's persistent per-rollup deferred queue at `executionQueueIndex`. These are transactions the rollup executed internally — no cross-chain proxy call drove them. You can call this to finalize state-root updates and any outgoing L1 calls attached to such transactions. You cannot call this while a cross-chain execution is in progress.
 
 **Who can call it:** Anyone, as long as no execution is currently active.
 
@@ -468,7 +468,7 @@ function executionQueueIndex(uint256 _rollupId) external view returns (uint256)
 | `L2ExecutionPerformed(rollupId, newState)` | Emitted after an entry's state deltas are applied. |
 | `ExecutionConsumed(crossChainCallHash, rollupId, executionQueueIndex)` | Emitted when a proxy-triggered execution entry is consumed. |
 | `L2TXExecuted(rollupId, executionQueueIndex)` | Emitted when `executeL2TX` consumes an entry. |
-| `ImmediateEntrySkipped(transientIdx, revertData)` | Emitted when an immediate entry (in-line L2 transaction) reverts during `postAndVerifyBatch` step 6 (drain immediate entries). The batch continues; only that entry's state changes are rolled back. |
+| `ImmediateEntrySkipped(transientIdx, revertData)` | Emitted when an immediate entry (in-line L2 transaction) reverts during `postAndVerifyBatch` step 5 (drain immediate entries). The batch continues; only that entry's state changes are rolled back. |
 | `L1ToL2CallNotFound(entryIndex, crossChainCallHash, currentL2ToL1Call, lastL1ToL2CallConsumed)` | Emitted on the deferred no-match path when a reentrant L1→L2 call has no matching `ExpectedL1ToL2Call`. The deferred flag surfaces as `ExecutionNotFound` at the entry boundary. |
 | `CallResult(entryIndex, l2ToL1CallNumber, success, returnData)` | Emitted after each L2→L1 call completes during entry processing. Not emitted for calls inside a revert span, since those events are rolled back with the span. |
 | `L1ToL2CallConsumed(entryIndex, l1ToL2CallNumber, crossChainCallHash, callCount)` | Emitted when a reentrant L1→L2 call (`ExpectedL1ToL2Call`) is consumed during execution. |
