@@ -21,7 +21,7 @@ When a transaction on L1 triggers cross-chain calls to an L2 (or vice versa), th
 - **Matches cross-chain boundaries** by correlating `CrossChainCallExecuted` and `IncomingCrossChainCallExecuted` events.
 - **Renders a unified tree** showing L1 and L2 execution interleaved at the `executeCrossChainCall` call sites.
 
-The decoder also performs three-tier ABI resolution for decoding function calls: local compiled artifacts (from `out/`), Blockscout APIs, and 4byte.directory. Environment variables containing `0x` addresses are auto-picked up as labels.
+The decoder also performs three-tier ABI resolution for decoding function calls: local compiled artifacts (from `out/`), Blockscout APIs, and 4byte.directory. The L1 (`EEZ`) and L2 (`EEZL2`) contract addresses can be pinned via two environment variables (see below).
 
 ## Prerequisites
 
@@ -128,17 +128,20 @@ node decode-trace.mjs \
   --json
 ```
 
-### Environment Variable Labels
+### Environment Variable Overrides
 
-Any environment variable whose value is a `0x`-prefixed Ethereum address is automatically registered as a label. For example:
+The decoder auto-discovers the `EEZ` (L1) and `EEZL2` (L2) contract addresses from the trace by detecting which contract receives `executeCrossChainCall` / `loadExecutionTable` / `postAndVerifyBatch` calls. You can override that discovery with exactly two optional environment variables:
+
+- `ROLLUPS` — address to label as `EEZ` (the L1 registry contract).
+- `MANAGER_L2` — address to label as `EEZL2` (the L2 manager contract).
 
 ```bash
-export EEZ_CONTRACT=0x1234...
+export ROLLUPS=0x1234...
 export MANAGER_L2=0xabcd...
 node decode-trace.mjs --tx $TX_HASH --l1-rpc $L1_RPC --l2-rpc $L2_RPC
 ```
 
-The EEZ and EEZL2 contracts are also auto-discovered by detecting which contract receives `executeCrossChainCall` / `loadExecutionTable` / `postAndVerifyBatch` calls in the trace.
+No other environment variables are inspected — arbitrary `0x`-valued variables (for example `EEZ_CONTRACT`) are **not** registered as labels.
 
 ## Output
 

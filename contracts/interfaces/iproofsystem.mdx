@@ -138,7 +138,28 @@ contract ECDSAProofSystem is IProofSystem {
 }
 ```
 
-The reference `ECDSAProofSystem.sol` implementation in the EEZ repository (`src/proofSystems/ECDSAProofSystem.sol`) follows exactly this pattern.
+The reference `ECDSAProofSystem.sol` in the EEZ repository (`src/proofSystems/ECDSAProofSystem.sol`) is intentionally **simpler** than the multisig example above — treat that example as an illustrative pattern for when you actually need threshold signatures, not a description of the reference. The reference is a **single-signer** verifier (one `address signer`, no `threshold` and no signature loop) that recovers directly against the **raw `bytes32 publicInputsHash`** with **no** EIP-191 `"\x19Ethereum Signed Message"` prefix:
+
+```solidity
+contract ECDSAProofSystem is IProofSystem {
+    address public immutable signer;
+
+    constructor(address _signer) {
+        signer = _signer;
+    }
+
+    function verify(
+        bytes calldata proof,
+        bytes32 publicInputsHash
+    ) external view returns (bool) {
+        // proof is a single 65-byte abi.encodePacked(r, s, v) signature (v = 27 or 28)
+        address recovered = ECDSA.recover(publicInputsHash, proof);
+        return recovered == signer;
+    }
+}
+```
+
+If you follow the multisig example instead, remember its EIP-191-prefixed digest is **incompatible** with the reference: a signature made over the prefixed hash will not recover against the raw `publicInputsHash`.
 
 ### Mock Verifier for Testing
 

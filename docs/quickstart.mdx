@@ -226,7 +226,7 @@ The E2E script pre-computed the full execution trace: what calls to make on L2, 
 
 ### On-chain proof verification
 
-`postAndVerifyBatch` verified the proof from `AcceptAllProofSystem`, confirmed the public inputs hash covered every entry and lookup call, marked rollup ID 1 as verified for the current block, and loaded the execution entry into the transient queue.
+`postAndVerifyBatch` verified the proof from `AcceptAllProofSystem`, confirmed the public inputs hash covered every entry and lookup call, marked rollup ID 1 as verified for the current block, and published the execution entry into the persistent per-rollup execution queue (keyed by destination rollup ID).
 
 ### Cross-chain call execution
 

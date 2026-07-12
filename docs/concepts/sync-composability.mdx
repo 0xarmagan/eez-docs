@@ -10,7 +10,7 @@ Ethereum's rollup ecosystem fragments liquidity and composability: when your con
 
 Standard cross-rollup bridges work by locking assets on the source chain, posting a message to L1, and releasing assets on the destination chain once the message is confirmed. This multi-step dance introduces three fundamental problems:
 
-- **Latency**: Finality on L1 takes at least one epoch (~12 minutes), and withdrawal periods on optimistic rollups can reach 7 days. Your transaction cannot atomically depend on the result of a call on another chain.
+- **Latency**: Finality on L1 takes about two epochs (~13 minutes), and withdrawal periods on optimistic rollups can reach 7 days. Your transaction cannot atomically depend on the result of a call on another chain.
 - **No atomicity**: If the second leg of your transaction fails, you must manually unwind the first. Flash loans — borrow, use, repay in one transaction — are impossible across chains using async bridges.
 - **Fragmented liquidity**: Protocols must maintain separate reserves on each rollup, duplicating capital and increasing slippage.
 

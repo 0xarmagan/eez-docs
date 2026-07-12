@@ -23,6 +23,66 @@ Before your rollup can participate in EEZ's cross-chain execution model, you mus
 
 ## Steps
 
+### 1. Deploy your `Rollup.sol` manager
+
+Deploy the per-rollup manager with your initial proof system(s), their verification keys, and the batch threshold. The manager holds your proof-system configuration and, after registration, owns the callback that records your assigned `rollupId`.
+
+```solidity
+constructor(
+    address rollupsRegistry,   // the central EEZ registry on L1
+    address _owner,            // owner: can add/remove proof systems, set threshold, set state root
+    uint256 _threshold,        // minimum proof systems that must verify each batch (M-of-N)
+    address[] memory proofSystems,  // IProofSystem-conforming verifier addresses
+    bytes32[] memory vkeys          // verification keys, parallel to proofSystems (non-zero, no duplicates)
+)
+```
+
+The constructor reverts `InvalidConfig` if `rollupsRegistry` is `address(0)`, if `proofSystems.length != vkeys.length`, or if any `vkey` is zero; it reverts `ProofSystemAlreadyAllowed` on a duplicate proof system. There is no central registry of proof systems — you are responsible for vetting each verifier before adding it.
+
+Using the reference deploy script from `eez-rollup0`:
+
+```bash
+forge script ... DeployRollup \
+  --sig "run(address,address,address,address)" \
+  $EEZ $PROOF_SYSTEM $AUTHORIZED_SIGNER $OWNER \
+  --rpc-url $L1_RPC --broadcast --private-key $PK
+# Outputs: ROLLUP_CONTRACT=<address>
+```
+
+### 2. Register the manager with the `EEZ` registry
+
+Call `registerRollup` on the central registry, passing your deployed manager and your rollup's genesis state root. The registry assigns the next sequential ID (`++rollupCounter`, starting at `1`; `MAINNET_ROLLUP_ID = 0` is reserved for L1), stores the initial state root, and emits `RollupCreated(rollupId, rollupContract, initialState)`.
+
+```solidity
+function registerRollup(address rollupContract, bytes32 initialState)
+    external
+    returns (uint256 rollupId)
+```
+
+Reverts `InvalidRollupContract` if `rollupContract` is `address(0)` or the registry itself. Using the reference script:
+
+```bash
+forge script ... RegisterRollup \
+  --sig "run(address,address,bytes32)" \
+  $EEZ $ROLLUP_CONTRACT $INITIAL_STATE \
+  --rpc-url $L1_RPC --broadcast --private-key $PK
+# Outputs: L2_ROLLUP_ID=<id>
+```
+
+### 3. The one-shot registration callback (automatic)
+
+As part of the same transaction, `registerRollup` calls back into your manager:
+
+```solidity
+function rollupContractRegistered(uint256 _rollupId) external {
+    if (msg.sender != ROLLUPS) revert NotEEZRegistry();  // registry-only
+    if (rollupId != 0) revert AlreadyRegistered();        // one-shot
+    rollupId = _rollupId;
+}
+```
+
+This writes the assigned `rollupId` into your manager's storage, replacing the `0` "not yet registered" sentinel. It accepts the call only from the registry and only once, so a manager can never be silently re-registered under a different ID. After this fires, the registry tracks your rollup's state root and deferred execution queue under that `rollupId`, and the `rollupContract` pointer is immutable.
+
 ---
 
 ## Managing your rollup after registration
