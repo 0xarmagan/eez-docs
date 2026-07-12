@@ -5,6 +5,7 @@ description: "Explore how EEZ's per-rollup proof system configuration, M-of-N th
 ---
 
 import UnauditedWarning from '../_unaudited-warning.mdx'
+import DiagramMotion from '@site/src/components/DiagramMotion';
 
 <UnauditedWarning />
 
@@ -62,20 +63,12 @@ The central `EEZ` registry never reads the threshold separately. All threshold s
 
 At a glance, for a batch touching two rollups with different accepted proof systems:
 
-```mermaid
-flowchart LR
-    RA("Rollup A\nthreshold = 2") --> ReqA("accepts: PS0, PS2")
-    RB("Rollup B\nthreshold = 2") --> ReqB("accepts: PS1, PS2")
-    ReqA --> Batch(["postAndVerifyBatch\none proof per required system"])
-    ReqB --> Batch
-    Batch --> Check{"checkProofSystemsAndGetVkeys\nall proofs verify?"}
-    Check -->|yes| Queue("Queues populated\nfor Rollup A and B")
-    Check -->|no| Revert("Entire batch reverts")
-
-    style Queue fill:#0f2a1e,stroke:#A8F3CE,color:#F2F2EC
-    style Revert fill:#1f1a12,stroke:#8B7B55,color:#F2F2EC
-    linkStyle 6 stroke:#8B7B55,color:#8B7B55
-```
+<DiagramMotion
+  src="/motion/multi-prover.webm"
+  poster="/motion/multi-prover-poster.png"
+  alt="Multi-prover threshold check: each rollup's required proof systems verify in postAndVerifyBatch; if all pass the queues populate, otherwise the entire batch reverts."
+  caption="Per-rollup threshold: proofs verify → queues populate, or the whole batch reverts."
+/>
 
 ## How `checkProofSystemsAndGetVkeys` Works in a Batch
 

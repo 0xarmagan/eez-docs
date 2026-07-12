@@ -5,6 +5,7 @@ description: "Learn how EEZ's CREATE2 CrossChainProxy preserves msg.sender ident
 ---
 
 import UnauditedWarning from '../_unaudited-warning.mdx'
+import DiagramMotion from '@site/src/components/DiagramMotion';
 
 <UnauditedWarning />
 
@@ -70,16 +71,12 @@ The decision hinges on whether the current EVM frame is inside a `STATICCALL`. S
 
 Routing at a glance:
 
-```mermaid
-flowchart LR
-    Call("Call arrives at\nCrossChainProxy") --> Probe{"tstore probe:\nstatic call context?"}
-    Probe -->|"no, regular CALL"| Exec(["Execute path\nexecuteCrossChainCall"])
-    Probe -->|yes| Look("Lookup path\nstaticCallLookup")
-    Exec --> ExecDetail("Runs the queued entry,\napplies state deltas")
-    Look --> LookDetail("Returns cached result,\nno state changes")
-
-    style LookDetail fill:#0f2a1e,stroke:#A8F3CE,color:#F2F2EC
-```
+<DiagramMotion
+  src="/motion/tstore-probe.webm"
+  poster="/motion/tstore-probe-poster.png"
+  alt="CrossChainProxy tstore probe: a regular CALL routes to the execute path and applies state deltas; a STATICCALL routes to the read-only lookup path with no state changes."
+  caption="How the proxy tells a STATICCALL from a regular CALL via a tstore probe."
+/>
 
 ## STATICCALL Detection
 

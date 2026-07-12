@@ -1,37 +1,21 @@
+import DiagramMotion from '@site/src/components/DiagramMotion';
+
 At a glance, every cross-rollup call goes through three stages:
 
-```mermaid
-flowchart LR
-    A("Off-chain\nprove & queue") --> B("L1\nexecute the call")
-    B --> C("L2\nexecute independently")
-    style A fill:#0d1f16,stroke:#3BE57E,stroke-width:2px,color:#F2F2EC
-    style B fill:#122b1d,stroke:#3BE57E,stroke-width:2px,color:#F2F2EC
-    style C fill:#17361f,stroke:#3BE57E,stroke-width:2px,color:#F2F2EC
-```
+<DiagramMotion
+  src="/motion/execution-flow.webm"
+  poster="/motion/execution-flow-poster.png"
+  alt="A cross-rollup call runs in three phases: off-chain prove and queue, execute on L1, then execute independently on L2."
+  caption="Three phases: off-chain prove & queue → execute on L1 → execute independently on L2."
+/>
 
 The full call, contract by contract, for `HelloWorldL1.helloL2World()` calling through to `HelloWorldL2.getWord()`:
 
-```mermaid
-flowchart LR
-    Seq(["Off-chain Sequencer"])
-    EEZ("EEZ Registry (L1)")
-    Proxy("CrossChainProxy (L1)")
-    App1("HelloWorldL1")
-    EEZL2("EEZL2 Manager")
-    App2("HelloWorldL2")
-
-    Seq -->|postAndVerifyBatch| EEZ
-    App1 -->|getWord| Proxy
-    Proxy -->|executeCrossChainCall| EEZ
-    EEZ -.->|World| Proxy
-    Proxy -.->|World| App1
-    Seq -->|executeIncomingCrossChainCall| EEZL2
-    EEZL2 -->|getWord| App2
-    App2 -.->|World| EEZL2
-
-    linkStyle 3 stroke:#A8F3CE,color:#A8F3CE
-    linkStyle 4 stroke:#A8F3CE,color:#A8F3CE
-    linkStyle 7 stroke:#A8F3CE,color:#A8F3CE
-```
+<DiagramMotion
+  src="/motion/actor-graph.webm"
+  poster="/motion/actor-graph-poster.png"
+  alt="Contract-by-contract call trace across L1 and L2: green arrows are calls in order, mint dashed arrows are returns, and the proof is checked at the EEZ Registry."
+  caption="The full call, contract by contract — green = calls (in order), mint dashed = returns."
+/>
 
 Solid green arrows are calls, dashed mint arrows are returns (mint marks a settled/proven value in the EEZ visual grammar). `EEZ.postAndVerifyBatch()` verifies the proof and queues the entry; `EEZ.executeCrossChainCall()` checks the hash and applies the state delta. Both sides happen in the same L1 block — see [Execution flow: a complete example](#execution-flow-a-complete-example) below for the step-by-step breakdown.

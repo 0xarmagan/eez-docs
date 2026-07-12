@@ -5,6 +5,7 @@ description: "Learn how EEZ enables atomic cross-rollup flash loans — borrow o
 ---
 
 import UnauditedWarning from '../_unaudited-warning.mdx'
+import DiagramMotion from '@site/src/components/DiagramMotion';
 
 <UnauditedWarning />
 
@@ -50,28 +51,12 @@ Each `L2ToL1Call` carries a `revertSpan` field (see [Build Entries](/guides/buil
 
 Every execution entry carries a `StateDelta` array whose `etherDelta` field records the **net ETH change for each rollup** caused by the entry (see [Build Entries](/guides/build-execution-entries#statedelta-l1-only) for the full struct). EEZ enforces accounting by checking that ETH flowing into and out of each rollup balances across all entries in a batch. For ERC20 flash loans, `etherDelta` is zero — only the bridge's lock-and-mint invariant applies.
 
-```mermaid
-flowchart LR
-    subgraph L1a["L1"]
-      direction LR
-      Borrow(["1. Borrow from\nFlashLoan pool"])
-      BridgeOut("2. Bridge tokens to L2")
-    end
-    subgraph L2["L2"]
-      direction LR
-      Receive("3a. Tokens land on L2")
-      Claim("3b. Claim NFT\ntoken-gated")
-      BridgeBack("3c. Bridge tokens\nback to L1")
-    end
-    subgraph L1b["L1"]
-      direction LR
-      BridgeIn("4. Tokens arrive\nback on L1")
-      Repay(["5. Repay the pool"])
-    end
-    Borrow --> BridgeOut --> Receive --> Claim --> BridgeBack --> BridgeIn --> Repay
-
-    style Repay fill:#0f2a1e,stroke:#A8F3CE,color:#F2F2EC
-```
+<DiagramMotion
+  src="/motion/flash-loan.webm"
+  poster="/motion/flash-loan-poster.png"
+  alt="Cross-rollup flash loan round trip: borrow on L1, bridge to L2, claim the token-gated NFT, bridge back, and repay on L1 — all in one block."
+  caption="Borrow on L1 → bridge to L2 → claim → bridge back → repay, all in one block."
+/>
 
 ## Worked Example: The Flash Loan Test
 

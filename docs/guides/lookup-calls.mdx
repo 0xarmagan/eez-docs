@@ -5,6 +5,7 @@ description: "Read remote rollup state in EEZ — nested ExpectedLookup for in-e
 ---
 
 import UnauditedWarning from '../_unaudited-warning.mdx'
+import DiagramMotion from '@site/src/components/DiagramMotion';
 
 <UnauditedWarning />
 
@@ -23,14 +24,12 @@ EEZ has two distinct lookup structs that live in two different places, each serv
 
 This split is what makes lookups **entry-scoped by construction**. A nested `ExpectedLookup` can only be resolved from the specific execution entry (or top-level lookup sub-execution) that owns it — there is no shared queue to pollute, no cross-entry collision, and no cross-rollup routing concern.
 
-```mermaid
-flowchart LR
-    S("A STATICCALL crosses\na rollup boundary") --> Where{"Inside an active\nexecution entry?"}
-    Where -->|yes| Nested("ExpectedLookup\nnested, lives in the entry")
-    Where -->|no| Top("LookupCall\ntop-level, storage pool")
-    Nested --> NestedKey("Matched by:\ncrossChainCallHash + 3 cursor fields")
-    Top --> TopKey("Matched by:\ncrossChainCallHash + state-root pins L1")
-```
+<DiagramMotion
+  src="/motion/lookup-routing.webm"
+  poster="/motion/lookup-routing-poster.png"
+  alt="Lookup-call routing: a STATICCALL crossing a rollup boundary routes to a nested ExpectedLookup when inside an active execution entry, or a top-level LookupCall otherwise."
+  caption="How a STATICCALL routes — nested in an entry, or top-level."
+/>
 
 ## ExpectedLookup: Nested Lookups (In-Entry)
 

@@ -5,6 +5,7 @@ description: "Assemble a ProofSystemBatchPerVerificationEntries struct, choose t
 ---
 
 import UnauditedWarning from '../_unaudited-warning.mdx'
+import DiagramMotion from '@site/src/components/DiagramMotion';
 
 <UnauditedWarning />
 
@@ -115,16 +116,12 @@ Deletes the transient tables, resets the transient cursor, then unconditionally 
 
 ---
 
-```mermaid
-flowchart LR
-    S1(["1-2. Validate\nbatch structure"]) --> S2("3. Verify all proofs atomically\nSTATICCALL to each rollup manager")
-    S2 --> S3("4. Mark rollups verified\nfor this block")
-    S3 --> S4("5-6. Load transient entries,\ndrain immediate ones inline")
-    S4 --> S5("7. Meta hook\ncaller consumes remaining transient")
-    S5 --> S6(["8. Publish the rest\nto persistent per-rollup queues"])
-
-    style S6 fill:#0f2a1e,stroke:#A8F3CE,color:#F2F2EC
-```
+<DiagramMotion
+  src="/motion/post-verify.webm"
+  poster="/motion/post-verify-poster.png"
+  alt="The postAndVerifyBatch internal pipeline: validate, verify all proofs, mark rollups verified, load and drain transient entries, meta hook, publish to per-rollup queues."
+  caption="What postAndVerifyBatch does internally, in order."
+/>
 
 ## Checking queue state
 

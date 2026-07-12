@@ -5,6 +5,7 @@ description: "Construct ExecutionEntry structs — including crossChainCallHash,
 ---
 
 import UnauditedWarning from '../_unaudited-warning.mdx'
+import DiagramMotion from '@site/src/components/DiagramMotion';
 
 <UnauditedWarning />
 
@@ -252,18 +253,12 @@ rh = RollingHashBuilder.appendCallEnd(rh, 1, true, abi.encode(uint256(1)));
 
 ### Walk-through: entry with a reentrant call
 
-```mermaid
-flowchart LR
-    B1("Entry-level call 1 begins") --> N1("NESTED_BEGIN 1\nreentrant frame opens")
-    N1 --> B2("CALL_BEGIN 2 -> CALL_END 2")
-    B2 --> B3("CALL_BEGIN 3 -> CALL_END 3")
-    B3 --> N1e("NESTED_END 1\nreentrant frame closes")
-    N1e --> E1("Entry-level call 1 ends")
-    E1 --> B4("CALL_BEGIN 4 -> CALL_END 4")
-    B4 --> RH(["rollingHash\nfinal accumulator value"])
-
-    style RH fill:#0f2a1e,stroke:#A8F3CE,color:#F2F2EC
-```
+<DiagramMotion
+  src="/motion/rolling-hash.webm"
+  poster="/motion/rolling-hash-poster.png"
+  alt="Order of CALL_BEGIN, CALL_END, NESTED_BEGIN and NESTED_END events for a reentrant call, accumulating into the entry's final rolling hash."
+  caption="How CALL / NESTED events fire in order and accumulate into the entry's rolling hash."
+/>
 
 For an entry where call 1 (entry-level) triggers a reentrant call that processes calls 2–3, then call 4 continues at entry-level:
 
