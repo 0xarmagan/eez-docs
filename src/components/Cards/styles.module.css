@@ -63,7 +63,8 @@
 }
 
 .cta {
-  margin-top: 0.4rem;
+  margin-top: auto;
+  padding-top: 0.5rem;
   font-size: 0.85rem;
   font-weight: 600;
   color: #17a558;
