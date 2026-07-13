@@ -123,6 +123,13 @@ Deletes the transient tables, resets the transient cursor, then unconditionally 
   caption="What postAndVerifyBatch does internally, in order."
 />
 
+<DiagramMotion
+  src="/motion/post-verify-fail.webm"
+  poster="/motion/post-verify-fail-poster.png"
+  alt="Failure path: when a required proof system fails verification, no rollup is marked verified, nothing is published, and the entire batch reverts."
+  caption="Verification is all-or-nothing: if any required proof fails, the entire batch reverts and nothing downstream runs."
+/>
+
 ## Checking queue state
 
 Before consuming entries, check the queue state to understand what is available and where the cursor is:
