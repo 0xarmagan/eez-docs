@@ -129,7 +129,12 @@ All proofs in a batch are verified atomically. If any single proof fails — whe
 The `verify` calls are made as `view` calls (EEZ's interface marks them `external view`). The Solidity compiler emits `STATICCALL` for these, which means a malicious proof system contract cannot reenter `postAndVerifyBatch` to corrupt state — any `SSTORE` or `TSTORE` inside the verifier's call frame would revert at the EVM level.
 :::
 
-> **For builders:** the failure path is a plain `revert InvalidProof()` inside `_verifyProofSystemBatch` (see `src/EEZ.sol`).
+<details>
+<summary>For builders: exact failure path</summary>
+
+The failure path is a plain `revert InvalidProof()` inside `_verifyProofSystemBatch` (see `src/EEZ.sol`).
+
+</details>
 
 ## Security Properties
 
