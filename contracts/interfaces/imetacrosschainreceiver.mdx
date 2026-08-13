@@ -28,7 +28,7 @@ Your implementation should call the cross-chain proxies whose entries are in the
 
 If your implementation reverts, the entire `postAndVerifyBatch` call reverts with it. Design your hook to be robust or wrap individual proxy calls in `try/catch` when partial failures are acceptable.
 
-**When EEZ calls this:** Step 6 of `postAndVerifyBatch`, after:
+**When EEZ calls this:** Step 7 of `postAndVerifyBatch`, after:
 1. Proof verification.
 2. Per-rollup queue wipe and `lastVerifiedBlock` update.
 3. Transient table population.
