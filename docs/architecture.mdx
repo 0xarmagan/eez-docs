@@ -7,7 +7,7 @@ description: "Deep-dive into EEZ's L1 registry, L2 manager, CrossChainProxy iden
 import ExecutionFlowDiagram from './_execution-flow-diagram.mdx'
 import DiagramMotion from '@site/src/components/DiagramMotion';
 
-EEZ is built around a two-sided contract architecture: a central L1 registry (`EEZ.sol`) that acts as the source of truth for rollup state and execution, and a lightweight L2 manager (`EEZL2.sol`) on each participating rollup that receives system-loaded execution tables. Bridging the two sides is the `CrossChainProxy` — a deterministic CREATE2 contract that gives each cross-chain address a stable on-chain identity. Shared base logic lives in `EEZBase.sol`, and per-rollup policy lives in individual `Rollup.sol` manager contracts deployed and owned by rollup operators. Understanding how these pieces interact is essential for both integrating with EEZ and reasoning about its security properties.
+EEZ is built around a two-sided contract architecture: a central L1 registry and a lightweight per-rollup L2 manager, bridged by a deterministic `CrossChainProxy` that gives every cross-chain address a stable on-chain identity.
 
 <DiagramMotion
   src="/motion/what-is-eez.webm"
@@ -63,7 +63,11 @@ EEZ maintains two tiers of execution entries per batch:
 
 ### Per-rollup isolation
 
-Each rollup's queue is fully independent. A `postAndVerifyBatch` for rollup A does not interfere with rollup B's queue. Different rollups can interleave consumption — the meta hook may consume entries from multiple rollups in a single transaction by calling through their respective proxies. Each such consumption is a **fresh top-level call**: during the meta-hook window (between proxy calls) `_insideExecution()` is false, so `executeCrossChainCall` takes its top-level branch and routes to `_consumeAndExecute`. Pre-computed reentrant/nested calls are a separate mechanism — they occur *within* a single entry's execution (when `_insideExecution()` is true) and route through `_consumeNestedAction`. The reentry restriction is global, not per-rollup: `_insideExecution()` is driven by a single transient flag, so while any entry (for any rollup) is mid-execution, a fresh top-level call into *any* rollup's queue — not just the same one — will revert.
+Each rollup's queue is fully independent — a `postAndVerifyBatch` for rollup A does not interfere with rollup B's queue. But queue isolation and the reentry lock are two different mechanisms:
+
+- **Queues can interleave.** The meta hook may consume entries from multiple rollups in a single transaction by calling through their respective proxies. Each such consumption is a **fresh top-level call**: during the meta-hook window (between proxy calls), `_insideExecution()` is false, so `executeCrossChainCall` takes its top-level branch and routes to `_consumeAndExecute`.
+- **Nested calls route separately.** Pre-computed reentrant/nested calls occur *within* a single entry's execution (when `_insideExecution()` is true) and route through `_consumeNestedAction` instead.
+- **The reentry lock is global, not per-rollup.** `_insideExecution()` is driven by a single transient flag — while any entry (for any rollup) is mid-execution, a fresh top-level call into *any* rollup's queue, not just the same one, will revert.
 
 ## The L2 EEZL2 contract
 
@@ -73,7 +77,7 @@ The L2 contract is constructed with two immutables: `ROLLUP_ID` (the rollup's ID
 
 **`loadExecutionTable(entries, lookupCalls)`** wipes the existing table and loads fresh entries. Entries are only consumable in the same block they were loaded (`lastLoadBlock == block.number`). After that block, the table is unreachable until the next `loadExecutionTable` call.
 
-**`executeIncomingCrossChainCall(destination, value, data, sourceAddress, sourceRollup, entries, lookupCalls)`** is the atomic path: the system address replaces the entire execution table and drives the first entry's call in one transaction. `entries[0].incomingCalls[0]` is the inbound call itself. Any ETH attached as `msg.value` must strictly equal the `value` parameter (`ValueMismatch` reverts otherwise) — this is the **mint** path: the system mints `value` on L2 by attaching it, and that ETH lives in the manager balance until it is drawn down when the entry forwards it through the source proxy. (The reverse **burn** path — forwarding `msg.value` back to `SYSTEM_ADDRESS` — lives in `executeCrossChainCall`, not here.)
+**`executeIncomingCrossChainCall(destination, value, data, sourceAddress, sourceRollup, entries, lookupCalls)`** is the atomic path: the system address replaces the entire execution table and drives the first entry's call in one transaction. `entries[0].incomingCalls[0]` is the inbound call itself. Any ETH attached as `msg.value` must strictly equal the `value` parameter (`ValueMismatch` reverts otherwise) — this is the **mint** path: the system mints `value` on L2 by attaching it, and that ETH lives in the manager balance until it is drawn down when the entry forwards it through the source proxy. The reverse **burn** path — forwarding `msg.value` back to `SYSTEM_ADDRESS` — lives in `executeCrossChainCall`, not here.
 
 The L2 struct vocabulary is self-relative rather than absolute: `incomingCalls` (calls executed on this L2) and `expectedOutgoingCalls` (pre-computed results of reentrant calls leaving this L2). This naming is intentional — an L2's counterpart can be L1 or another L2, so absolute names like `l1Calls` would frequently be wrong.
 
@@ -100,7 +104,9 @@ function computeCrossChainCallHash(
 }
 ```
 
+:::warning
 Off-chain tooling must use this exact encoding — field order and `abi.encode` (not `abi.encodePacked`) — when pre-computing entry hashes to match against `entry.proxyEntryHash`.
+:::
 
 Static context detection (for read-only cross-chain calls) uses the EIP-1153 `tstore` / `tload` asymmetry: the proxy attempts a `tstore` in a self-call; if the self-call reverts, the proxy is inside a `STATICCALL` and routes to `staticCallLookup` instead of `executeCrossChainCall`.
 
@@ -110,7 +116,15 @@ Static context detection (for read-only cross-chain calls) uses the EIP-1153 `ts
 
 - **Proof systems**: a mapping of `proofSystem => verificationKey`. Only non-zero vkeys are allowed. The owner adds proof systems with `addProofSystem` and removes them with `removeProofSystem`.
 - **Threshold**: the M-of-N minimum number of proof systems that must attest to a batch for it to be accepted. A threshold above the current PS count locks the rollup until more proof systems are added.
-- **Custom data**: `getCustomData(blockNumber)` returns an opaque blob that the EEZ registry folds into the batch's public inputs hash, binding the proof to a specific L1 block context. `blockNumber == 0` is the "no L1 context" sentinel and returns an empty blob; when `blockNumber` is the latest-block sentinel (`type(uint64).max`) the reference implementation returns ABI-encoded `(uint256 timestamp, bytes32 blockHash)` with the current block's `block.timestamp` and previous block's `blockhash`; for any specific past block it looks up `blockhash(blockNumber)` and returns `(0, blockHash)` if non-zero — but `blockhash` only resolves the most recent 256 blocks, so a `blockNumber` outside that window (or the current/future block) reverts `BlockHashUnavailable` rather than silently binding a zero hash.
+- **Custom data**: `getCustomData(blockNumber)` returns an opaque blob that the EEZ registry folds into the batch's public inputs hash, binding the proof to a specific L1 block context. The returned blob depends on `blockNumber`:
+
+  | `blockNumber` | Returned blob |
+  | --- | --- |
+  | `0` (no L1 context sentinel) | Empty blob |
+  | `type(uint64).max` (latest-block sentinel) | ABI-encoded `(uint256 timestamp, bytes32 blockHash)` — current block's `block.timestamp` and previous block's `blockhash` |
+  | A specific block within the most recent 256 blocks | `(0, blockHash)` from `blockhash(blockNumber)` |
+  | A specific block outside that 256-block window (or the current/future block) | Reverts `BlockHashUnavailable` — never silently binds a zero hash |
+
 - **State root escape**: `setStateRoot(newRoot)` lets the owner directly update the L1 state root outside of the proof system, subject to the registry's same-block lockout (`RollupBatchActiveThisBlock` reverts if a batch already touched the rollup this block).
 
 The `checkProofSystemsAndGetVkeys(proofSystems[])` function is called by EEZ during `postAndVerifyBatch`. It enforces the threshold, rejects any unknown proof system, and returns the verification key for each proof system in the submitted subset. This is a `STATICCALL` from EEZ — the manager cannot mutate state during proof verification.

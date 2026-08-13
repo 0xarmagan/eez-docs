@@ -1,23 +1,13 @@
 ---
-title: "Introduction to Ethereum Economic Zone: Synchronous Cross-Rollup Protocol"
+title: "Ethereum Economic Zone: Synchronous Cross-Rollup Protocol"
 sidebar_label: "Introduction"
 description: "EEZ is an early-stage Ethereum protocol enabling atomic, synchronous cross-rollup calls verified on-chain by configurable proof systems in one L1 block."
 slug: /
 ---
 
-import DiagramMotion from '@site/src/components/DiagramMotion';
 import {Card, CardGrid} from '@site/src/components/Cards';
 
-# Ethereum Economic Zone
-
-**A contract on one rollup calls a contract on another and gets the return value in the same L1 block** — atomic cross-rollup composability, verified on-chain. No lock-and-mint bridges, oracles, or relayers in the path.
-
-<DiagramMotion
-  src="/motion/what-is-eez.webm"
-  poster="/motion/what-is-eez-poster.png"
-  alt="A cross-chain call in EEZ is a normal Ethereum CALL, then a RETURN, between smart contracts on different chains."
-  caption="A cross-chain interaction is a normal Ethereum CALL → RETURN — proxies, not bridges."
-/>
+**A contract on one rollup calls a contract on another and gets the return value in the same L1 block** — atomic cross-rollup composability, verified on-chain. No lock-and-mint bridges, oracles, or relayers in the path. See it in motion on the [Architecture](/architecture) page.
 
 :::caution
 Early-stage and **not audited** — interfaces and storage layout are still in flux. Not for production use.
