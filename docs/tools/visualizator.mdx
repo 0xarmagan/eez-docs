@@ -1,10 +1,10 @@
 ---
 title: "EEZ Visualizator: Cross-Chain Execution Web Dashboard"
 sidebar_label: "Visualizator"
-description: "Inspect EEZ cross-chain execution in a web dashboard — step through execution tables, transaction bundles, call correlations, and rollup state panels."
+description: "Inspect EEZ cross-chain execution with the Visualizator's scenario demo and live dashboard — step through execution tables, transaction bundles, call correlations, and rollup state panels."
 ---
 
-The EEZ Visualizator is a web dashboard for inspecting cross-chain execution flows step by step. Rather than reading raw execution tables in your terminal, the Visualizator presents the evolution of L1 and L2 execution queues side by side, highlights cross-chain call correlations as they are consumed, and lets you step through the entire execution plan at your own pace. It is the fastest way to build intuition for how EEZ batches work and to verify that a given transaction bundle matches your expectations.
+The EEZ Visualizator is a web dashboard for inspecting cross-chain execution flows step by step. Rather than reading raw execution tables in your terminal, the Visualizator presents the evolution of L1 and L2 execution queues side by side, highlights cross-chain call correlations as they are consumed, and lets you step through the entire execution plan at your own pace. Use it to build intuition for how EEZ batches work, or to verify that a given transaction bundle matches your expectations.
 
 ## Accessing the Visualizator
 
@@ -13,6 +13,15 @@ The hosted version is always available at:
 **[https://visualizator-woad.vercel.app](https://visualizator-woad.vercel.app)**
 
 No installation is required. Open the URL in any modern browser to start exploring the built-in example scenarios.
+
+## Two Visualizator Tools: Scenario Demo and Live Dashboard
+
+The `visualizator/` directory ships two distinct tools:
+
+- **Scenario demo (`visualizator/index.html`)** — the static, single-file HTML page described below. This is what's hosted at [https://visualizator-woad.vercel.app](https://visualizator-woad.vercel.app). It works entirely from the built-in scenario data and has no network connectivity of its own.
+- **Live dashboard (`visualizator/dashboard/`)** — a separate Vite + React + viem application that connects directly to real L1 and L2 RPC endpoints for live block inspection. Its Connection Bar lets you enter L1/L2 RPC URLs and contract addresses; the `useChainWatcher` and `useAutoDiscovery` hooks then watch both chains and stream real cross-chain execution events into the same execution-table / flow-diagram / state-panel UI as the scenario demo.
+
+For live network inspection without running the dashboard yourself, you can also use the EEZ trace decoder CLI (see [Trace Decoder](/tools/trace-decoder)) to produce a unified execution diagram from real transaction traces.
 
 ## What the Visualizator Shows
 
@@ -27,7 +36,7 @@ The main panel shows the L1 and L2 execution tables side by side. Each entry in 
 - **State delta** — the `currentState → newState` transition and `etherDelta` for this entry's rollup.
 - **Call count** — number of top-level cross-chain calls in the entry.
 - **Rolling hash** — the expected hash of the executed call sequence.
-- **Nested actions** — any `ExpectedL1ToL2Call` / `ExpectedOutgoingCrossChainCall` frames.
+- **Nested actions** — any [`ExpectedL1ToL2Call`](/contracts/data-types#expectedl1tol2call) / [`ExpectedOutgoingCrossChainCall`](/contracts/data-types#expectedoutgoingcrosschaincall) frames.
 
 Entries are color-coded: blue for L1, purple for L2. The currently active step is highlighted in teal, and consumed entries appear with a strikethrough.
 
@@ -71,15 +80,6 @@ The Visualizator ships with several built-in scenarios corresponding to the EEZ 
 
 Select a scenario using the tabs at the top of the page.
 
-## Two Visualizator Tools: Scenario Demo and Live Dashboard
-
-The `visualizator/` directory ships two distinct, present-day tools rather than one tool with a planned future upgrade:
-
-- **Scenario demo (`visualizator/index.html`)** — the static, single-file HTML page described above. This is what's hosted at [https://visualizator-woad.vercel.app](https://visualizator-woad.vercel.app). It works entirely from the built-in scenario data and has no network connectivity of its own.
-- **Live dashboard (`visualizator/dashboard/`)** — a separate Vite + React + viem application that connects directly to real L1 and L2 RPC endpoints for live block inspection. Its Connection Bar lets you enter L1/L2 RPC URLs and contract addresses; the `useChainWatcher` and `useAutoDiscovery` hooks then watch both chains and stream real cross-chain execution events into the same execution-table / flow-diagram / state-panel UI as the scenario demo.
-
-For live network inspection without running the dashboard yourself, you can also use the EEZ trace decoder CLI (see [Trace Decoder](/tools/trace-decoder)) to produce a unified execution diagram from real transaction traces.
-
 ## Self-Hosting the Scenario Demo
 
 `visualizator/index.html` is a self-contained static file with no build step — open it directly in a browser, or serve it from any static host (Vercel, Netlify, GitHub Pages, or a plain CDN).
@@ -88,19 +88,19 @@ For live network inspection without running the dashboard yourself, you can also
 
 The live dashboard is a Vite project with its own `package.json`, located at `visualizator/dashboard/`.
 
-## Step 1 — Navigate to the dashboard directory
+### Step 1 — Navigate to the dashboard directory
 
 ```bash
 cd visualizator/dashboard
 ```
 
-## Step 2 — Install dependencies
+### Step 2 — Install dependencies
 
 ```bash
 npm install
 ```
 
-## Step 3 — Start the development server
+### Step 3 — Start the development server
 
 ```bash
 npm run dev
@@ -108,7 +108,7 @@ npm run dev
 
 Vite starts a local server (typically at `http://localhost:5173`). Open it, click **Connect**, and enter your L1/L2 RPC URLs and contract addresses in the Connection Bar. The dashboard hot-reloads on any change to the source files.
 
-## Step 4 — Build for production
+### Step 4 — Build for production
 
 ```bash
 npm run build
