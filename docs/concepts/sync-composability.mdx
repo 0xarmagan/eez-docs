@@ -35,13 +35,13 @@ On-chain, EEZ doesn't re-discover what happened; it replays a pre-approved scrip
 3. **`postAndVerifyBatch`**: The L1 EEZ contract verifies the proof, loads the entries, and executes any immediate work. Deferred entries are queued per-rollup, ready for consumption in the same block.
 4. **Consumption**: When your contract calls a cross-chain proxy, the proxy forwards the call to EEZ, which replays the pre-approved entry — verifying the rolling hash at the end to confirm nothing diverged from the simulation.
 
-The reason this can stay synchronous is real-time proving: per-rollup and blob proofs are verified and aggregated into a single on-chain PLONK proof, fast enough to land inside an L1 slot.
+The reason this can stay synchronous is real-time proving: EEZ's design targets verifying and aggregating per-rollup and blob proofs into a single on-chain PLONK proof, fast enough to land inside an L1 slot. This ZisK-based aggregation pipeline is the target architecture, not the proof system running today — see [Security](/reference/security) for the current, ECDSA-signature-based placeholder proof system and honest audit status.
 
 <DiagramMotion
   src="/motion/proving-tree.webm"
   poster="/motion/proving-tree-poster.png"
-  alt="The ZisK proving pipeline: blob proofs and per-rollup proofs are verified and aggregated level by level into one PLONK proof posted on-chain."
-  caption="ZisK real-time proving: per-chain and blob proofs aggregate into a single on-chain PLONK proof, targeting under 3 seconds so composability stays synchronous."
+  alt="EEZ's targeted ZisK proving pipeline (design goal, not yet live): blob proofs and per-rollup proofs would be verified and aggregated level by level into one PLONK proof posted on-chain."
+  caption="ZisK real-time proving is EEZ's design target, not yet live: per-chain and blob proofs would aggregate into a single on-chain PLONK proof, targeting under 3 seconds so composability stays synchronous."
 />
 
 If any call returns different data than the proof committed to, the rolling hash check fails and the entire entry reverts. You get the execution you proved, or you get nothing — no partial states, no stuck funds.

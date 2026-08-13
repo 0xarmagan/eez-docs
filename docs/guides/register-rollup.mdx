@@ -43,7 +43,7 @@ Deploy it directly with `forge create` (no dedicated deploy script ships in `eez
 
 ```bash
 forge create src/rollupContract/Rollup.sol:Rollup \
-  --rpc-url $L1_RPC --private-key $PK \
+  --rpc-url $L1_RPC --private-key $PK --broadcast \
   --constructor-args $EEZ $OWNER $THRESHOLD "[$PROOF_SYSTEM]" "[$VKEY]"
 # Outputs: Deployed to: <ROLLUP_CONTRACT address>
 ```

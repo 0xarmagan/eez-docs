@@ -8,7 +8,7 @@ import UnauditedWarning from '../_unaudited-warning.mdx'
 
 <UnauditedWarning />
 
-EEZ publishes chain activity — native transactions, cross-chain calls, their results, forced reverts, and transaction boundaries — as a single binary stream of messages, with no header. Every one of those event kinds differs from every other only by its **message type**; there is exactly one exception, a single reserved byte at the very start of the stream. This is the wire format a batch's EIP-4844 blobs (and trailing calldata) actually contain: the raw bytes whose hashes get folded into the [public inputs hash](/concepts/multi-prover#the-public-inputs-hash) that every proof system verifies against.
+EEZ publishes chain activity — native transactions, cross-chain calls, their results, forced reverts, and transaction boundaries — as a single binary stream of messages, with no header. Every one of those event kinds differs from every other only by its **message type**; there is exactly one exception, a single reserved byte at the very start of the stream. This is the wire format a batch's EIP-4844 blobs (and trailing calldata) actually contain: the logical byte stream — packed into the blobs' field elements, not stored verbatim (see below) — whose hash gets folded into the [public inputs hash](/concepts/multi-prover#the-public-inputs-hash) that every proof system verifies against.
 
 ## Framing: One Reserved Byte, Then a Stream of Messages
 
@@ -51,7 +51,7 @@ A handful of encoding rules apply uniformly across every message type's fields:
 <details>
 <summary>For builders: physical packing into a blob's field elements</summary>
 
-An EIP-4844 blob is 4096 field elements of 32 bytes each, and every element must be a valid BLS12-381 scalar (below the field modulus). Each field element carries 31 bytes of stream data; its 32nd byte is unused and must be zero, which keeps every element well under the modulus regardless of its data bytes. Elements are read least-significant-byte first, so the unused zero byte is the most significant one read last — a blob's useful capacity is `4096 × 31 = 126,976` bytes. The trailing `callData` has no such constraint; it's raw bytes appended to the decoded stream as-is.
+An EIP-4844 blob is 4096 field elements of 32 bytes each, and every element must be a valid BLS12-381 scalar (below the field modulus). Each field element carries 31 bytes of stream data; its 32nd byte is unused and must be zero, which keeps every element well under the modulus regardless of its data bytes. Elements are read least-significant-byte first, so the unused zero byte is the most significant one read last — under this version's 31-byte-per-element packing, a blob's useful capacity is `4096 × 31 = 126,976` bytes. A denser packing (254 bits per element) is planned for a future format version, so this figure is specific to version `00`, not a permanent property of the format. The trailing `callData` has no such constraint; it's raw bytes appended to the decoded stream as-is.
 
 </details>
 
@@ -80,7 +80,7 @@ Three pairs always come matched: every `Call` / `StaticCall` has a result (`Retu
 <details>
 <summary>For builders: why the marker messages carry no fields</summary>
 
-`CloseBlobStream`, `Snapshot`, `Revert`, and `FinishCrossChainTransaction` are all pure brackets — their meaning comes entirely from their *position* in the stream, not from any payload:
+`Snapshot`, `Revert`, and `FinishCrossChainTransaction` are all pure brackets — their meaning comes entirely from their *position* in the stream, not from any payload. (`CloseBlobStream` carries no fields for the same reason — no payload needed — but it stands alone rather than pairing with an opener; see [Framing](#framing-one-reserved-byte-then-a-stream-of-messages) above.)
 
 - `Snapshot` opens a revertable region; the matching `Revert` closes it, rolling back everything executed in between. No chain id, count, or call identifier is needed — the bracket itself delimits the region.
 - `Call` / `StaticCall`'s `from_chain`, and both endpoints of `ReturnSuccess` / `ReturnFail`, are never encoded either, even though those messages *do* carry other fields — they're implied by the currently executing chain, tracked by a context stack that evolves deterministically as `InitiateCrossChainTransaction`, `Call` / `StaticCall`, `ReturnSuccess` / `ReturnFail`, and `FinishCrossChainTransaction` messages are processed in order.
@@ -96,5 +96,7 @@ A `ChainOperation`'s `operations` payload is opaque at the protocol level — an
 ## A Malformed Stream Is Rejected Whole
 
 A blob stream is either entirely valid or entirely invalid — there's no partial acceptance. If a message decodes with a bad encoding, an unassigned type byte, or a bracket that never closes, the *whole* stream is rejected: every blob in the batch and the trailing calldata, not just the offending message or the bytes after it. In practice this check falls on the prover — a valid proof simply cannot be produced over a malformed stream, so publishing one is equivalent to publishing nothing.
+
+This rejection covers structural validity, not byte-level canonicality: minimal encodings (e.g. shortest-form varints) are not enforced, so a non-minimal but structurally valid encoding still decodes successfully. The raw stream bytes are therefore not themselves canonical or unique for a given logical message.
 
 The version byte carries the same all-or-nothing property forward: a future format revision must use a different version byte, and a verifier that doesn't recognize the byte it reads rejects the stream outright rather than guessing at how to parse what follows. A newer-format stream can never be misparsed under an older version's rules.
