@@ -4,10 +4,14 @@ sidebar_label: "Bridge Tokens"
 description: "Bridge ETH and ERC20 tokens across rollups with Bridge.sol — covering deployment, initialization, the lock-and-mint model, and WrappedToken mechanics."
 ---
 
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
 The EEZ `Bridge` contract is a periphery contract that enables trustless asset transfers between Ethereum L1 and any EEZ-registered rollup. It uses a **lock-and-mint model**: native tokens are locked in the Bridge on the source chain, and a corresponding `WrappedToken` ERC20 is minted on the destination. When you bridge back, the wrapped token is burned and the native tokens are released. The Bridge itself is designed to be deployed at the **same address on every chain** using CREATE2, so both sides of the bridge are always at a predictable, identical address.
 
-:::warning
-`Bridge.sol` is an **illustrative periphery example** — not production-hardened. Known simplifications include no fee-on-transfer token accounting and no re-deployment authorization checks on `initialize()`. Audit and harden before any production use.
+:::note
+`Bridge.sol` is also an **illustrative periphery example**, not a hardened reference implementation. Known simplifications: no fee-on-transfer token accounting, and no re-deployment authorization checks on `initialize()`.
 :::
 
 ## The Lock-and-Mint Model
@@ -33,11 +37,13 @@ The Bridge is deployed with no constructor arguments so it can be placed at the 
 forge script script/DeployBridge.s.sol:BridgeDeployL1 \
   --rpc-url $L1_RPC --broadcast --private-key $PK \
   --sig "run(address,bytes32)" $ROLLUPS $SALT
+# Outputs: Deployed to: <BRIDGE_L1 address>
 
 # Deploy Bridge on L2 (same salt → same address)
 forge script script/DeployBridge.s.sol:BridgeDeployL2 \
   --rpc-url $L2_RPC --broadcast --private-key $PK \
   --sig "run(address,uint256,bytes32)" $MANAGER_L2 $L2_ROLLUP_ID $SALT
+# Outputs: Deployed to: <BRIDGE_L2 address> (identical to BRIDGE_L1 with a shared factory + salt)
 ```
 
 Choose your salt carefully — a deterministic, human-readable salt (e.g. `keccak256("eez-bridge-v1")`) works well for testnet. The CREATE2 address is a function of the factory address, salt, and init bytecode, so identical inputs produce the same address on every EVM chain.
@@ -186,7 +192,7 @@ Wrapped tokens are registered in two mappings on the Bridge:
 
 ## Full Example: Bridging an ERC20 from L1 to L2
 
-## Step 1 — Approve the L1 Bridge
+### Step 1 — Approve the L1 Bridge
 
 Grant the Bridge allowance to pull your tokens before bridging:
 
@@ -194,7 +200,7 @@ Grant the Bridge allowance to pull your tokens before bridging:
 IERC20(token).approve(address(bridge_l1), 1000e18);
 ```
 
-## Step 2 — Call bridgeTokens on L1
+### Step 2 — Call bridgeTokens on L1
 
 Lock tokens on L1 and enqueue the cross-chain delivery:
 
@@ -209,11 +215,13 @@ bridge_l1.bridgeTokens(
 
 The Bridge locks `1000e18` tokens in its contract and emits `TokensBridged`.
 
-## Step 3 — Wait for the EEZ batch to process
+### Step 3 — Wait for the EEZ batch to process
 
 The cross-chain call to `receiveTokens` is delivered by EEZ when the L1 batch that includes this block is verified. During the same L1 block, the L2 Bridge's `receiveTokens` is called through the source proxy.
 
-## Step 4 — Recipient holds WrappedToken on L2
+Confirm delivery by watching for `TokensBridged` on the L2 Bridge, or by polling the recipient's wrapped-token balance (Step 4). If the L1 batch that posted this call is never verified in the same block, delivery never happens — the `lastVerifiedBlock` gate (see [Post Batch](/guides/post-verify-batch#same-block-execution-requirement)) prevents any later-block consumption, so a missed same-block verification means resubmitting the bridge call in a new batch.
+
+### Step 4 — Recipient holds WrappedToken on L2
 
 On L2, the Bridge calls `_getOrDeployWrapped`, which either deploys a new `WrappedToken` via CREATE2 (first bridge for this token) or reuses the existing one. The recipient's balance increases by `1000e18` wrapped tokens.
 
@@ -223,7 +231,7 @@ address wrapped = bridge_l2.getWrappedToken(token, 0); // 0 = L1 mainnet
 IERC20(wrapped).balanceOf(recipient); // → 1000e18
 ```
 
-## Step 5 — Bridge back: approve and bridgeTokens on L2
+### Step 5 — Bridge back: approve and bridgeTokens on L2
 
 To return to L1, approve and bridge the wrapped token from L2:
 
@@ -238,3 +246,9 @@ bridge_l2.bridgeTokens(
 ```
 
 The Bridge sees `wrappedTokenInfo[wrapped].originalToken != address(0)`, burns the wrapped tokens, and routes a `receiveTokens` call back to the L1 Bridge. On L1, the locked tokens are released to `recipient`.
+
+## Next steps
+
+- [Build ExecutionEntry Structs](/guides/build-execution-entries) — construct the entries that carry a bridge call's cross-chain delivery
+- [Post and Verify a Batch](/guides/post-verify-batch) — see how the same-block consumption requirement is enforced on-chain
+- [Cross-Rollup Flash Loans](/guides/flash-loans) — a worked example that bridges tokens out and back within one block
