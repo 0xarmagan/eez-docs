@@ -57,7 +57,7 @@ This means two rollups in the same EEZ deployment can use completely different s
 
 The threshold defines how many of the rollup's registered proof systems must attest to a batch for it to be accepted. If a rollup's threshold is 2, any `postAndVerifyBatch` batch that touches that rollup must include at least two proof systems that the rollup recognizes — and both must produce valid proofs.
 
-Threshold enforcement is handled entirely by the manager contract's `checkProofSystemsAndGetVkeys` function, which atomically validates subset membership, enforces the threshold, and returns the vkey list. EEZ calls it once per rollup per batch as a `STATICCALL` — see [IProofSystem](/contracts/interfaces/iproofsystem) for the interface definition and [IRollupContract](/contracts/interfaces/irollupcontract) for the manager contract expectations.
+Threshold enforcement is handled entirely by the manager contract's `checkProofSystemsAndGetVkeys` function, which atomically validates subset membership, enforces the threshold, and returns the vkey list. EEZ calls it once per rollup per batch as a `STATICCALL` — see [IRollupContract](/contracts/interfaces/irollupcontract) for the interface definition and the manager contract's obligations.
 
 :::note
 The central `EEZ` registry never reads the threshold separately. All threshold semantics live inside `checkProofSystemsAndGetVkeys`. This means a custom manager can implement any threshold model — including time-weighted quorums, governance-driven thresholds, or progressive decentralization schemes — without any changes to EEZ itself.
