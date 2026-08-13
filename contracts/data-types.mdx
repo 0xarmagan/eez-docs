@@ -115,7 +115,7 @@ struct ExpectedLookup {
 | Name | Type | Description |
 | --- | --- | --- |
 | `crossChainCallHash` | `bytes32` | Hash of the looked-up call. For static lookups, computed with `value = 0`. |
-| `destinationRollupId` | `uint256` | The rollup this looked-up call targets. Must match the calling proxy's rollup. Also serves as part of the match predicate: `postAndVerifyBatch` verifies it is pinned by the host entry's state deltas. |
+| `destinationRollupId` | `uint256` | The rollup this looked-up call targets. Must match the calling proxy's rollup. Also serves as part of the match predicate: [`postAndVerifyBatch`](/contracts/eez) verifies it is pinned by the host entry's state deltas. |
 | `returnData` | `bytes` | The pre-computed result. Returned to the caller in static mode (`failed == false`). Used as the revert payload in reverted mode (`failed == true`). |
 | `failed` | `bool` | When `true`, the lookup executes any sub-calls as a mini-entry and then reverts with `returnData`. The caller's `try/catch` block catches the revert. When `false`, the lookup runs sub-calls as STATICCALLs and returns `returnData` on success. |
 | `l2ToL1CallNumber` | `uint64` | The value of `_currentL2ToL1Call` at the moment this lookup was observed during simulation. Part of the four-tuple match key. |
@@ -250,7 +250,7 @@ struct ProofSystemBatchPerVerificationEntries {
 | `blobIndices` | `uint256[]` | Indices into the transaction's EIP-4844 blob list that this batch consumes. These blob hashes are folded into `sharedPublicInput`. |
 | `callData` | `bytes` | Batch-scoped calldata. Its `keccak256` hash is folded into `sharedPublicInput`. |
 | `proofs` | `bytes[]` | One proof per proof system in `proofSystems[]` (parallel arrays). Each proof is passed to `IProofSystem(proofSystems[k]).verify(proofs[k], publicInputsHash[k])`. |
-| `blockNumber` | `uint64` | The single L1 block the batch binds to. Forwarded to each rollup's `IRollupContract.getCustomData(blockNumber)`. Pass `0` for no block context; pass `type(uint64).max` for latest context. |
+| `blockNumber` | `uint64` | The single L1 block the batch binds to. Forwarded to each rollup's [`IRollupContract.getCustomData(blockNumber)`](/contracts/interfaces/irollupcontract). Pass `0` for no block context; pass `type(uint64).max` for latest context. |
 
 ---
 
@@ -270,7 +270,7 @@ struct RollupIdWithProofSystems {
 | Name | Type | Description |
 | --- | --- | --- |
 | `rollupId` | `uint256` | A registered rollup ID participating in this batch. Must be greater than zero (zero is the mainnet sentinel, never a registered rollup ID). |
-| `proofSystemIndex` | `uint64[]` | Strictly-increasing indices into the batch's global `proofSystems[]` array selecting the proof systems this rollup accepts. The length must satisfy this rollup's threshold as enforced by its `IRollupContract.checkProofSystemsAndGetVkeys`. |
+| `proofSystemIndex` | `uint64[]` | Strictly-increasing indices into the batch's global `proofSystems[]` array selecting the proof systems this rollup accepts. The length must satisfy this rollup's threshold as enforced by its [`IRollupContract.checkProofSystemsAndGetVkeys`](/contracts/interfaces/irollupcontract). |
 
 ---
 
