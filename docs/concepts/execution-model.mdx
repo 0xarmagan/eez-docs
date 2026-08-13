@@ -9,7 +9,7 @@ import DiagramMotion from '@site/src/components/DiagramMotion';
 
 <UnauditedWarning />
 
-EEZ's execution model inverts the normal on-chain programming model: rather than executing calls and discovering results, you pre-compute every result off-chain, commit to those results with a proof, and then replay the pre-approved execution deterministically on-chain. This section walks through the complete lifecycle — from building an `ExecutionEntry` off-chain, through submitting it in a batch, to consuming it in the same block.
+EEZ's execution model inverts the normal on-chain programming model: rather than executing calls and discovering results, you pre-compute every result off-chain, commit to those results with a proof, and then replay the pre-approved execution deterministically on-chain — from building an `ExecutionEntry` off-chain, through submitting it in a batch, to consuming it in the same block.
 
 ## Off-Chain Simulation by the Rollup Node
 
@@ -109,7 +109,7 @@ See [Build Entries](/guides/build-execution-entries) for the constructor walkthr
 
 An entry's `proxyEntryHash` field determines how it is consumed:
 
-- **Immediate** (`proxyEntryHash == bytes32(0)`): The entry represents a pure L2 transaction or a batch's built-in L1 work. `postAndVerifyBatch` executes these inline, before the meta hook fires. If an immediate entry reverts, EEZ emits `ImmediateEntrySkipped` and continues — it is not a hard error.
+- **Immediate** (`proxyEntryHash == bytes32(0)`): The entry represents a pure L2 transaction or a batch's built-in L1 work. `postAndVerifyBatch` executes these inline, before the [meta hook](/reference/glossary#meta-hook) (the callback that lets the batch submitter consume transient entries in the same transaction) fires. If an immediate entry reverts, EEZ emits `ImmediateEntrySkipped` and continues — it is not a hard error.
 - **Deferred** (`proxyEntryHash != bytes32(0)`): The entry is triggered by a proxy call. It sits in the per-rollup queue (or the transient stream) waiting for `executeCrossChainCall` or `executeL2TX` to consume it. The caller's proxy recomputes `crossChainCallHash` from the live call context; if it matches the entry's `proxyEntryHash`, the entry is consumed and executed.
 
 ## What Happens at `postAndVerifyBatch`
@@ -125,7 +125,14 @@ The phrase "same block" is load-bearing. All entries posted in a `postAndVerifyB
 Once entries are in the queue, they are consumed sequentially. When a user calls a cross-chain proxy on L1, the proxy routes to `executeCrossChainCall`. EEZ recomputes `crossChainCallHash` from the proxy's identity and the live call context, then looks up the next entry in the queue for that rollup:
 
 - If `entry.proxyEntryHash == crossChainCallHash`, the entry matches and EEZ proceeds to execute all calls in `l2ToL1Calls[]`, verify the rolling hash, apply the state deltas, and return `entry.returnData`.
-- If the hashes don't match, EEZ checks the lookup pool for a pre-recorded reverting call (`_tryRevertedTopLevelLookup`). If that also fails, it reverts `ExecutionNotFound`.
+- If the hashes don't match, EEZ checks the lookup pool for a pre-recorded reverting call. If that also fails, it reverts `ExecutionNotFound`.
+
+<details>
+<summary>For builders: internal function name</summary>
+
+The lookup-pool check for a pre-recorded reverting call is implemented in `_tryRevertedTopLevelLookup`.
+
+</details>
 
 `executeL2TX(rollupId)` is the permissionless entry point for immediate entries (`proxyEntryHash == 0`). It consumes the next entry in the rollup's queue that was posted as a pure L2 transaction.
 
