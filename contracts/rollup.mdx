@@ -65,7 +65,7 @@ constructor(
 <details>
 <summary>rollupContractRegistered — One-shot registration callback from EEZ</summary>
 
-`rollupContractRegistered` is called by the `EEZ` registry exactly once, immediately after `EEZ.registerRollup` assigns a rollup ID. It stores the assigned `rollupId` so that this contract can later pass it back to the registry when calling `EEZ.setStateRoot`. You should never call this function yourself — only the `ROLLUPS` registry is permitted to call it, and it can only be called once.
+`rollupContractRegistered` is called by the `EEZ` registry exactly once, immediately after `EEZ.registerRollup` assigns a rollup ID. It stores the assigned `rollupId` so that this contract can later pass it back to the registry when calling [`EEZ.setStateRoot`](/contracts/eez). You should never call this function yourself — only the `ROLLUPS` registry is permitted to call it, and it can only be called once.
 
 **Who can call it:** Only `ROLLUPS` (the `EEZ` registry). Calling from any other address reverts.
 
@@ -93,7 +93,7 @@ function rollupContractRegistered(uint256 _rollupId) external
 
 Reference implementation of the `IRollupContract.checkProofSystemsAndGetVkeys` interface method — see [IProofSystem](/contracts/interfaces/iproofsystem) for its role in batch verification. Enforces this rollup's `threshold` and rejects any address whose `verificationKey` is zero, then returns the vkey list parallel to the input.
 
-**Who can call it:** Anyone, but in practice only `EEZ` during `postAndVerifyBatch`. Called via STATICCALL so no state mutation is possible.
+**Who can call it:** Anyone, but in practice only `EEZ` during [`postAndVerifyBatch`](/contracts/eez). Called via STATICCALL so no state mutation is possible.
 
 ```solidity
 function checkProofSystemsAndGetVkeys(address[] calldata proofSystems)
