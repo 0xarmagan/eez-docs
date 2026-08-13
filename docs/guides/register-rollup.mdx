@@ -39,14 +39,13 @@ constructor(
 
 The constructor reverts `InvalidConfig` if `rollupsRegistry` is `address(0)`, if `proofSystems.length != vkeys.length`, or if any `vkey` is zero; it reverts `ProofSystemAlreadyAllowed` on a duplicate proof system. There is no central registry of proof systems — you are responsible for vetting each verifier before adding it.
 
-Using the reference deploy script from `eez-rollup0`:
+Deploy it directly with `forge create` (no dedicated deploy script ships in `eez-core-protocol` for a standalone manager — the repo's own scripted deploys, like `DeployEEZL1` in `script/e2e/shared/DeployInfra.s.sol`, are wired for local e2e devnets, not a generic external rollup):
 
 ```bash
-forge script ... DeployRollup \
-  --sig "run(address,address,address,address)" \
-  $EEZ $PROOF_SYSTEM $AUTHORIZED_SIGNER $OWNER \
-  --rpc-url $L1_RPC --broadcast --private-key $PK
-# Outputs: ROLLUP_CONTRACT=<address>
+forge create src/rollupContract/Rollup.sol:Rollup \
+  --rpc-url $L1_RPC --private-key $PK \
+  --constructor-args $EEZ $OWNER $THRESHOLD "[$PROOF_SYSTEM]" "[$VKEY]"
+# Outputs: Deployed to: <ROLLUP_CONTRACT address>
 ```
 
 ### 2. Register the manager with the `EEZ` registry
@@ -59,14 +58,15 @@ function registerRollup(address rollupContract, bytes32 initialState)
     returns (uint256 rollupId)
 ```
 
-Reverts `InvalidRollupContract` if `rollupContract` is `address(0)` or the registry itself. Using the reference script:
+Reverts `InvalidRollupContract` if `rollupContract` is `address(0)` or the registry itself.
 
 ```bash
-forge script ... RegisterRollup \
-  --sig "run(address,address,bytes32)" \
-  $EEZ $ROLLUP_CONTRACT $INITIAL_STATE \
-  --rpc-url $L1_RPC --broadcast --private-key $PK
-# Outputs: L2_ROLLUP_ID=<id>
+cast send $EEZ "registerRollup(address,bytes32)" $ROLLUP_CONTRACT $INITIAL_STATE \
+  --rpc-url $L1_RPC --private-key $PK
+
+# Confirm the assigned rollupId and stored state root on-chain:
+cast call $EEZ "rollups(uint256)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
+# Returns: (rollupContract, initialState, etherBalance)
 ```
 
 ### 3. The one-shot registration callback (automatic)
@@ -114,7 +114,7 @@ rollup.setStateRoot(newStateRoot);
 // internally calls: IEEZRegistry(ROLLUPS).setStateRoot(rollupId, newStateRoot)
 ```
 
-The registry enforces a same-block lockout: if `lastVerifiedBlock(rollupId) == block.number`, the call reverts with `RollupBatchActiveThisBlock`. You can only use the escape hatch in blocks where no verified batch has touched your rollup.
+The registry gates this call three ways: it reverts `NotRollupContract` if the caller isn't the registered manager (`msg.sender == rollups[rollupId].rollupContract`), then applies two temporal lockouts — `SetStateRootNotAllowedDuringExecution` if called while `_insideExecution()` is true (blocks a malicious manager from rewriting state mid-execution via a reentrant proxy path), and `RollupBatchActiveThisBlock` if `lastVerifiedBlock(rollupId) == block.number` (a verified batch already touched this rollup this block). You can only use the escape hatch in blocks where no verified batch has touched your rollup, and never from inside an active execution.
 
 ### Ownership transfer
 

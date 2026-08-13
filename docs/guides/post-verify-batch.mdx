@@ -219,13 +219,18 @@ The entry's `returnData` is `abi.encode("World")`. `h1.helloL2World()` decodes i
 
 | Constraint | Error |
 | --- | --- |
+| `proofSystems[]` non-empty, `proofSystems.length == proofs.length`, `rollupIdsWithProofSystems[]` non-empty | `InvalidProofSystemConfig` |
 | `proofSystems[]` strictly ascending, no `address(0)` | `DuplicateProofSystem` |
 | `rollupIdsWithProofSystems[].rollupId` strictly ascending, all registered, all \> 0 | `InvalidProofSystemConfig` |
-| Each `proofSystemIndex[]` strictly ascending, all in `[0, proofSystems.length)` | `InvalidProofSystemConfig` |
+| Each `proofSystemIndex[]` non-empty, strictly ascending, all in `[0, proofSystems.length)` | `InvalidProofSystemConfig` |
 | `transientExecutionEntryCount <= entries.length` | `TransientCountExceedsEntries` |
 | `transientLookupCallCount <= l1ToL2lookupCalls.length` | `TransientLookupCallCountExceedsLookupCalls` |
-| Each `stateDeltas[].rollupId` present in `rollupIdsWithProofSystems` | `RollupNotInBatch(rid)` |
+| Each entry's `stateDeltas[].rollupId` strictly ascending (no mainnet/`0` delta) and present in the batch | `StateDeltasNotStrictlyIncreasing(rid)` / `RollupNotInBatch(rid)` |
 | Each entry's `destinationRollupId` present among that entry's own `stateDeltas[].rollupId` | `EntryDestinationNotInStateDeltas(rid)` |
+| Each entry's `l2ToL1Calls[].sourceRollupId` and `expectedL1ToL2Calls[].destinationRollupId` must be one of that entry's own verified (`stateDeltas`) rollups | `CallSourceNotVerified(rid)` / `ReentrantDestinationNotVerified(rid)` |
+| Each entry's `expectedLookups[].destinationRollupId` (recursively, including nested sub-calls) must be one of that entry's verified rollups | `ReentrantDestinationNotVerified(rid)` |
+| Top-level lookup `expectedStateRoots[].rollupId` strictly ascending (no mainnet/`0` pin) and present in the batch | `ExpectedStateRootsNotStrictlyIncreasing(rid)` / `RollupNotInBatch(rid)` |
+| Top-level lookup's `destinationRollupId` must be one of its own `expectedStateRoots[].rollupId` pins | `LookupDestinationNotPinned(rid)` |
 | No re-entry (`_transientExecutions.length == 0`) | `PostBatchReentry` |
 | `transientExecutionEntryCount == 0` requires `transientLookupCallCount == 0` | `TransientLookupCallsWithoutTransientEntries` |
 
