@@ -4,13 +4,17 @@ sidebar_label: "Bridge"
 description: "Complete reference for Bridge.sol and WrappedToken.sol — the periphery contracts for bridging ETH and ERC20 tokens across rollups."
 ---
 
-The `Bridge` contract is a periphery component that handles locking, minting, burning, and releasing assets as they move between rollups in the EEZ network. It is deployed at the same address on every chain via CREATE2 (no constructor arguments), then configured per-chain via `initialize`. When you bridge a native token outbound, the Bridge locks it and calls through a `CrossChainProxy` to instruct the destination-chain Bridge to release or mint the equivalent amount. When a wrapped token is bridged back toward its origin chain, the Bridge burns it before triggering the unlock on the other side.
+import UnauditedWarning from '../docs/_unaudited-warning.mdx'
+
+<UnauditedWarning />
+
+:::note
+**Illustrative example only.** `Bridge.sol` and `WrappedToken.sol` are reference implementations intended to demonstrate the EEZ cross-chain pattern — they are not production-hardened: no fee-on-transfer token accounting, no multi-chain deployment authorization, and no decentralized deployment strategy.
+:::
+
+The `Bridge` contract is a periphery component that handles locking, minting, burning, and releasing assets as they move between rollups in the EEZ network. It is deployed at the same address on every chain via CREATE2 (no constructor arguments), then configured per-chain via `initialize`. When you bridge a native token outbound, the Bridge locks it and calls through a [`CrossChainProxy`](/concepts/cross-chain-proxy) to instruct the destination-chain Bridge to release or mint the equivalent amount. When a wrapped token is bridged back toward its origin chain, the Bridge burns it before triggering the unlock on the other side.
 
 The `WrappedToken` contract is the ERC-20 representation minted on destination chains for tokens that originate elsewhere. Each `WrappedToken` is deployed by the Bridge via CREATE2 and can only be minted or burned by the Bridge that deployed it.
-
-:::warning
-**Illustrative example only.** `Bridge.sol` and `WrappedToken.sol` are reference implementations intended to demonstrate the EEZ cross-chain pattern. They are not production-hardened: there is no fee-on-transfer token accounting, no multi-chain deployment authorization, and no decentralized deployment strategy. Audit and harden these contracts before any production use.
-:::
 
 ---
 
@@ -20,7 +24,7 @@ The `WrappedToken` contract is the ERC-20 representation minted on destination c
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `manager` | `IEEZ` | The cross-chain manager contract (`EEZ` on L1, `EEZL2` on L2). Set by `initialize`. |
+| `manager` | `IEEZ` | The cross-chain manager contract ([`EEZ`](/contracts/eez) on L1, [`EEZL2`](/contracts/eezl2) on L2). Set by `initialize`. |
 | `rollupId` | `uint256` | This chain's rollup ID (`0` for L1 mainnet). Set by `initialize`. |
 | `admin` | `address` | The admin that can call `setCanonicalBridgeAddress`. Set by `initialize`. |
 | `canonicalBridgeAddress` | `address` | Optional override for the bridge's own address used in cross-chain proxy lookups. If unset (`address(0)`), `address(this)` is used. |
@@ -78,7 +82,7 @@ function bridgeEther(uint256 _rollupId, address destinationAddress) external pay
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `rollupId` | `uint256` | The destination rollup ID. The Bridge will route the ETH through the `CrossChainProxy` that represents `destinationAddress` on this rollup. A proxy is deployed via `createCrossChainProxy` if one does not already exist. |
+| `_rollupId` | `uint256` | The destination rollup ID. The Bridge will route the ETH through the `CrossChainProxy` that represents `destinationAddress` on this rollup. A proxy is deployed via `createCrossChainProxy` if one does not already exist. |
 | `destinationAddress` | `address` | The recipient address on the destination rollup. The Bridge looks up (or deploys) the `CrossChainProxy` that represents this address on the destination chain, then sends `msg.value` to it. |
 
 #### Errors
@@ -114,7 +118,7 @@ function bridgeTokens(
 | --- | --- | --- |
 | `token` | `address` | The ERC-20 token to bridge. Can be a native token held on this chain (will be locked) or a `WrappedToken` minted by this Bridge for a foreign token (will be burned). Must not be `address(0)`. |
 | `amount` | `uint256` | The number of token units to bridge. Must be greater than zero. You must have approved the Bridge to spend at least this amount before calling. |
-| `rollupId` | `uint256` | The destination rollup ID. Determines which rollup's Bridge contract will receive the `receiveTokens` call. |
+| `_rollupId` | `uint256` | The destination rollup ID. Determines which rollup's Bridge contract will receive the `receiveTokens` call. |
 | `destinationAddress` | `address` | The recipient address on the destination rollup. |
 
 #### Errors
