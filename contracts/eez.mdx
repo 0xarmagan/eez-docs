@@ -116,8 +116,7 @@ function postAndVerifyBatch(
 | `ReentrantDestinationNotVerified(uint256)` | A reentrant `expectedL1ToL2Calls` entry's (or nested lookup's) `destinationRollupId` is not in the host's verified rollup set. MAINNET (L1) is never a valid cross-chain destination. |
 | `InvalidProof` | At least one proof system's `verify(proof, publicInputsHash)` returned false. |
 | `ThresholdNotMet(uint256 submitted, uint256 required)` (from `Rollup`) | A rollup's manager rejected the proof-system subset because `submitted` (the subset length) is below `required` (the rollup's configured threshold). |
-| `StateRootMismatch(uint256)` | An immediate entry's `StateDelta.currentState` doesn't match the on-chain state root for that rollup at consumption time. |
-| `EtherDeltaMismatch` | The net ETH flow for an immediate entry doesn't match the `etherDelta` declared in the entry's `stateDeltas`. |
+| `StateRootMismatch(uint256)`, `RollingHashMismatch`, `UnconsumedL2ToL1Calls`, `UnconsumedL1ToL2Calls`, `EtherDeltaMismatch`, `InsufficientRollupBalance`, `ExecutionNotFound` | **Not** raised by the immediate-entry drain (step 5, `attemptApplyImmediate`) — those failures are caught internally and surface as `ImmediateEntrySkipped` instead, never reverting the batch. These can only revert `postAndVerifyBatch` itself if the meta hook (step 6) drives a queued entry via a nested `executeCrossChainCall` / `executeL2TX` call that fails and the caller's own `executeMetaCrossChainTransactions()` doesn't catch it — see those functions' error tables for exactly when each condition fires. |
 
 </details>
 
@@ -159,12 +158,14 @@ function executeCrossChainCall(address sourceAddress, bytes calldata callData)
 | `UnauthorizedProxy` | `msg.sender` is not a registered `CrossChainProxy`. |
 | `ExecutionNotInCurrentBlock(uint256)` | `lastVerifiedBlock` for the proxy's rollup is not the current block. The queued entries have expired. |
 | `ExecutionNotFound` | No matching entry exists for the computed `crossChainCallHash` in the active stream, and no matching reverted lookup call exists either. |
+| `ReentrantDestinationMismatch(uint256, uint256)` | Called reentrantly (`_insideExecution()` is true) and the matched `ExpectedL1ToL2Call`'s declared `destinationRollupId` differs from this call's rollup. |
 | `StateRootMismatch(uint256)` | An entry's `StateDelta.currentState` doesn't match the current on-chain state root for the affected rollup. |
 | `RollingHashMismatch` | The computed rolling hash after processing all calls doesn't match the entry's committed `rollingHash`. |
 | `EtherDeltaMismatch` | Net ETH flow across the entry doesn't match the declared `etherDelta`. |
 | `InsufficientRollupBalance` | Applying a negative `etherDelta` would drive a rollup's ether balance below zero. |
 | `UnconsumedL2ToL1Calls` | Not all calls in the flat `l2ToL1Calls` array were consumed by the end of the entry. |
 | `UnconsumedL1ToL2Calls` | Not all reentrant calls in `expectedL1ToL2Calls` were consumed. |
+| `StaticCallWithValue` | A flat call flagged `isStatic` in the entry's `l2ToL1Calls` carries a non-zero `value`. A `STATICCALL` cannot transfer ETH, so this is rejected rather than silently dropped. |
 
 </details>
 
@@ -175,7 +176,7 @@ function executeCrossChainCall(address sourceAddress, bytes calldata callData)
 
 **Who can call it:** Anyone, as long as no execution is currently active.
 
-**Emits:** `L2TXExecuted(rollupId, executionQueueIndex)`, `L2ExecutionPerformed`, `EntryExecuted`
+**Emits:** `L2TXExecuted(rollupId, executionQueueIndex)`, `ExecutionConsumed(crossChainCallHash, rollupId, executionQueueIndex)`, `L2ExecutionPerformed`, `EntryExecuted`
 
 ```solidity
 function executeL2TX(uint256 rollupId) external returns (bytes memory result)
@@ -207,6 +208,7 @@ function executeL2TX(uint256 rollupId) external returns (bytes memory result)
 | `UnconsumedL2ToL1Calls` | Not all calls in the flat `l2ToL1Calls` array were consumed by the end of the entry. |
 | `UnconsumedL1ToL2Calls` | Not all reentrant calls in `expectedL1ToL2Calls` were consumed. |
 | `EtherDeltaMismatch` | The net ETH flow doesn't match the declared `etherDelta`. |
+| `StaticCallWithValue` | A flat call flagged `isStatic` in the entry's `l2ToL1Calls` carries a non-zero `value`. A `STATICCALL` cannot transfer ETH, so this is rejected rather than silently dropped. |
 
 </details>
 
@@ -487,7 +489,7 @@ The top-level batch struct you pass to `postAndVerifyBatch`. It bundles the exec
 
 ### `ExecutionEntry`
 
-Represents one unit of cross-chain execution. Contains `stateDeltas` (pre/post state roots and ether deltas per rollup), a flat `l2ToL1Calls` array of all calls in execution order, a `expectedL1ToL2Calls` table for reentrant call pre-computation, `expectedLookups` for nested static/reverted reads, `callCount` for the top-level call partition, pre-computed `returnData`, and the expected `rollingHash`.
+Represents one unit of cross-chain execution. Contains `stateDeltas` (pre/post state roots and ether deltas per rollup), `proxyEntryHash` (the `crossChainCallHash` a proxy must present to consume this entry via `executeCrossChainCall` — `bytes32(0)` for a pure L2 transaction consumed via `executeL2TX`), `destinationRollupId` (which rollup's queue this entry is published under), a flat `l2ToL1Calls` array of all calls in execution order, a `expectedL1ToL2Calls` table for reentrant call pre-computation, `expectedLookups` for nested static/reverted reads, `callCount` for the top-level call partition, pre-computed `returnData`, and the expected `rollingHash`.
 
 ### `StateDelta`
 
