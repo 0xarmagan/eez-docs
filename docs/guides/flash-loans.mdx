@@ -143,24 +143,28 @@ The rolling hash captures the exact sequence of cross-chain call events, making 
 
 ### Running the E2E Test Locally
 
-## Step 1 — Start two local Anvil nodes
+#### Step 1 — Start two local Anvil nodes
 
 ```bash
 anvil --port 8545 &   # L1
+# Outputs: Listening on 127.0.0.1:8545
 anvil --port 8546 &   # L2
+# Outputs: Listening on 127.0.0.1:8546
 ```
 
-## Step 2 — Run the full e2e script
+#### Step 2 — Run the full e2e script
 
 From the project root, the `e2e.sh` script deploys everything, loads the L2 table, executes the L1 batch, and decodes the resulting execution logs:
 
 ```bash
 bash script/flash-loan-test/e2e.sh
+# Outputs: deployment addresses for every contract, followed by the decoded
+# execution logs for the flash-loan cycle once it completes
 ```
 
 The script deploys EEZ on L1, EEZL2 on L2, deploys Bridge contracts on both chains with a shared CREATE2 salt, deploys the flash loan pool and executor contracts, and then executes the full flash loan flow.
 
-## Step 3 — Deploy contracts manually (network mode)
+#### Step 3 — Deploy contracts manually (network mode)
 
 For a persistent testnet, deploy each component separately:
 
@@ -176,7 +180,7 @@ bash script/flash-loan-test/deploy.sh \
 
 The script outputs all deployed addresses. Save them — you will need them for the execute phase.
 
-## Step 4 — Load the L2 execution table
+#### Step 4 — Load the L2 execution table
 
 Run `ExecuteFlashLoanL2` against the L2 RPC to pre-load the L2 execution table:
 
@@ -188,7 +192,7 @@ forge script script/flash-loan-test/ExecuteFlashLoan.s.sol:ExecuteFlashLoanL2 \
   $FLASH_LOANERS_NFT $TOKEN $WRAPPED_TOKEN_L2 "Test Token" "TT" 18
 ```
 
-## Step 5 — Execute the L1 flash loan (same block as batch post)
+#### Step 5 — Execute the L1 flash loan (same block as batch post)
 
 ```bash
 forge script script/flash-loan-test/ExecuteFlashLoan.s.sol:ExecuteFlashLoanL1 \
@@ -202,7 +206,11 @@ forge script script/flash-loan-test/ExecuteFlashLoan.s.sol:ExecuteFlashLoanL1 \
 
 ## Key Takeaways
 
-- **Same-block atomicity** — the entire borrow-bridge-use-bridge-back-repay cycle fits within one L1 block because EEZ processes L1 and L2 state transitions together in `postAndVerifyBatch`.
-- **Pre-committed execution plan** — both L1 and L2 entries must be posted before the flash loan executes. The prover computes the full plan off-chain; the on-chain machinery just verifies and executes it.
-- **Reentrant L2→L1 calls** — `ExpectedL1ToL2Call` entries in the L1 execution table capture calls that originate on L2 and land on L1 mid-execution. These are the mechanism that brings tokens back before the flash loan callback returns.
-- **No trusted intermediary** — the ZK proof in `postAndVerifyBatch` attests to the validity of the L2 state transitions. The L1 execution machinery enforces correctness of the on-chain call sequence via rolling hash.
+- **Reentrant L2→L1 calls close the loop** — `ExpectedL1ToL2Call` is what brings the tokens back to L1 before the flash loan callback returns, inside the same top-level entry's nested frame.
+- **No trusted intermediary** — the ZK proof in `postAndVerifyBatch` attests to the validity of the L2 state transitions; the L1 execution machinery enforces correctness of the on-chain call sequence via the rolling hash.
+
+## Next steps
+
+- [Bridge Tokens](/guides/bridge-tokens) — the lock-and-mint mechanics `bridgeTokens`/`receiveTokens` rely on in this flow
+- [Build ExecutionEntry Structs](/guides/build-execution-entries) — construct the `revertSpan` and `ExpectedL1ToL2Call` entries this pattern depends on
+- [Post and Verify a Batch](/guides/post-verify-batch) — how `postAndVerifyBatch` and the meta hook fit into the same-block execution model
