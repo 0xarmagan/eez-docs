@@ -8,7 +8,7 @@ import UnauditedWarning from '../_unaudited-warning.mdx'
 
 <UnauditedWarning />
 
-EEZ publishes chain activity — native transactions, cross-chain calls, their results, forced reverts, and transaction boundaries — as a single binary stream of messages, with no header. Every one of those event kinds differs from every other only by its **message type**; there is exactly one exception, a single reserved byte at the very start of the stream. This is the wire format a batch's EIP-4844 blobs (and trailing calldata) actually contain: the logical byte stream — packed into the blobs' field elements, not stored verbatim (see below) — whose hash gets folded into the [public inputs hash](/concepts/multi-prover#the-public-inputs-hash) that every proof system verifies against.
+EEZ publishes chain activity — native transactions, cross-chain calls, their results, forced reverts, and transaction boundaries — as a single binary stream of messages, with no header. Every one of those event kinds differs from every other only by its **message type**; there is exactly one exception, a single reserved byte at the very start of the stream. This is the wire format a batch's EIP-4844 blobs (and trailing calldata) actually contain, once you unpack the blobs' field elements (see below). What actually gets bound into the [public inputs hash](/concepts/multi-prover#the-public-inputs-hash) is the blobs' own EIP-4844 versioned hashes (`blobhash()`, over the packed field elements, not the decoded stream) plus a `keccak256` of the raw calldata tail — the proof system itself is responsible for showing that this packed commitment decodes to the claimed logical message stream.
 
 ## Framing: One Reserved Byte, Then a Stream of Messages
 
