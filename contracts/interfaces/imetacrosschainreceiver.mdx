@@ -4,7 +4,9 @@ sidebar_label: "IMetaCrossChainReceiver"
 description: "Reference for IMetaCrossChainReceiver — the post-batch hook that lets batch submitters consume transient EEZ execution entries in a single transaction."
 ---
 
-`IMetaCrossChainReceiver` is a callback interface that the EEZ central registry invokes on the `msg.sender` of `postAndVerifyBatch` when that sender is a contract. It gives you, as the batch submitter, a chance to consume transient execution entries in the same transaction as the batch post — enabling fully synchronous cross-chain composability within a single L1 block. If your address has no code (`msg.sender.code.length == 0`), the registry skips the hook entirely. Implementing this interface is optional; you only need it when you want to trigger cross-chain calls in the same transaction that posts the batch.
+`IMetaCrossChainReceiver` is a callback interface that the EEZ central registry invokes on the `msg.sender` of [`postAndVerifyBatch`](/contracts/eez) when that sender is a contract. It gives you, as the batch submitter, a chance to consume transient execution entries in the same transaction as the batch post — enabling fully synchronous cross-chain composability within a single L1 block. If your address has no code (`msg.sender.code.length == 0`), the registry skips the hook entirely. Implementing this interface is optional; you only need it when you want to trigger cross-chain calls in the same transaction that posts the batch.
+
+If your address has code but does not implement `executeMetaCrossChainTransactions` (or exposes a different selector) and has no fallback function, the call reverts — the registry invokes the hook as a direct interface call with no `try`/`catch`, so this reverts the entire `postAndVerifyBatch` transaction, not just the hook.
 
 ## Interface Definition
 
@@ -40,7 +42,7 @@ The hook fires only if `_transientExecutionIndex < _transientExecutions.length` 
 
 ## Usage Pattern
 
-The typical pattern is to implement `IMetaCrossChainReceiver` on the contract that orchestrates your cross-chain flow and have it call `postAndVerifyBatch` with a batch that includes transient entries for the calls you want to trigger immediately.
+The typical pattern is to implement `IMetaCrossChainReceiver` on the contract that orchestrates your cross-chain flow and have it call `postAndVerifyBatch` with a [`ProofSystemBatchPerVerificationEntries`](/contracts/data-types#proofsystembatchperverificationentries) batch that includes transient entries for the calls you want to trigger immediately.
 
 ```solidity
 contract MyOrchestrator is IMetaCrossChainReceiver {
