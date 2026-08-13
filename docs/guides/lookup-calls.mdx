@@ -59,10 +59,34 @@ struct ExpectedLookup {
 
 **Failed mode (`failed == true`)**: A reverting nested lookup is matched during execution and runs as a mini sub-execution, then reverts with `returnData`. The calling contract's `try/catch` observes the revert. This mode allows pre-computing the effect of a cross-chain call that you know will revert — for example, checking whether a remote operation is feasible without committing to it.
 
-### Constraints
+### The `callCount` Partition
 
-- Static lookups must have `callCount == 0` and an empty `expectedL1ToL2Calls` array. There is no partition to record.
-- Reverted lookups with actual sub-calls (`l2ToL1Calls.length > 0`) require `callCount >= 1` and must satisfy the partition invariant: `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length`.
+`callCount` means exactly what `ExecutionEntry.callCount` means: the number of **top-level** iterations the sub-execution's `_processNCalls` runs over `l2ToL1Calls[]`, partitioned against any reentrant frames:
+
+```
+callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length
+```
+
+Reverted-mode lookups come in two shapes, distinguished by `callCount` (not by a separate flag):
+
+| `l2ToL1Calls.length` | `callCount` | Resolution | Hash schema |
+| --- | --- | --- | --- |
+| `0` | `0` | Plain cached revert — a no-op sub-execution, then reverts | none (`rollingHash` must be `0`) |
+| `> 0` | `> 0` | Real state-mutating sub-execution, run as a mini-entry, then reverts | tagged |
+
+**Worked example:** `l2ToL1Calls.length = 4`, where call 0 is top-level with no reentry, and call 1 triggers a reentrant call matched against `expectedL1ToL2Calls[0]` (`callCount = 2`, consuming calls 2 and 3 inside the nested frame). Then `callCount = 2`, `expectedL1ToL2Calls[0].callCount = 2`, and `2 + 2 == 4`.
+
+### Why `callCount == 0` for Static (and Plain Failed) Lookups
+
+Static lookups run their `l2ToL1Calls[]` *flatly* via `_processNStaticCalls` — a simple `STATICCALL` loop with an untagged hash. There is no frame split, no cursor, no nested table — nothing to partition. `callCount` is unused and **must be `0`** (a prover convention — the static resolvers never read it).
+
+The same `callCount == 0` also applies to a **plain failed lookup** with no sub-calls (`l2ToL1Calls.length == 0`) — it still runs through the reverted-lookup path, but with nothing to partition it degenerates into a no-op sub-execution that immediately reverts with `returnData`.
+
+The mode split is by **context**, not by `callCount`: a `failed` lookup matched during execution always runs through the reverted-lookup path; `staticCallLookup` always resolves statically. Within the reverted path, `callCount` is what distinguishes a plain cached revert (`0`) from a real sub-execution (`>= 1`).
+
+> **Pitfall:** `callCount == 0` with a non-empty `expectedL1ToL2Calls` is malformed — a nested reentrant frame can only be entered from a top-level call, so a real sub-execution always has `callCount >= 1`. Conversely, a `failed == false` lookup is never matched by the execution-context revert fallbacks (they require `failed == true`).
+
+*(Source: `LOOKUP_SPEC.md` §3, "The `callCount` partition")*
 
 ### The executingLookupIndex Field
 
@@ -212,12 +236,12 @@ On L2, `staticCallLookup` scans only the single `lookupCalls` pool by `crossChai
 When building lookup entries, follow these rules or the batch will revert on-chain:
 
 - `failed == false` requires `callCount == 0`, `expectedL1ToL2Calls.length == 0`, and (for `LookupCall`) `expectedLookups.length == 0`.
-- `callCount > 0` requires `failed == true` and the tagged hash schema.
-- `callCount > 0` requires `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length`.
+- `callCount > 0` requires `failed == true`, the tagged hash schema, and `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length`.
 - `l2ToL1Calls.length > 0` with `callCount == 0` is invalid for failed lookups (`UnconsumedL2ToL1Calls` would fire).
+- `expectedL1ToL2Calls.length > 0` requires `callCount >= 1` — a nested reentrant frame can only be entered from a top-level call.
 - Static sub-calls use the **untagged** hash (`keccak256(prev, success, retData)` per sub-call); failed sub-executions use the **tagged** hash.
-- A nested `ExpectedLookup` resolves only from the active host's `expectedLookups[]`.
-- A `LookupCall` resolves only when `!_insideExecution()`.
+- A nested `ExpectedLookup` resolves only from the active host's `expectedLookups[]`; a `LookupCall` resolves only from the pool and only when `!_insideExecution()`.
+- A reverted lookup always reverts with `returnData`; a static lookup returns it — or reverts with it, if that static read is itself `failed`.
 
 :::note
 For top-level lookups, the prover decides which rollups to pin in `expectedStateRoots`. An empty array is valid and matches unconditionally. Pin aggressively when the cached read must be consistent with a specific cross-rollup interleaving; omit pins for reads that are state-independent.
