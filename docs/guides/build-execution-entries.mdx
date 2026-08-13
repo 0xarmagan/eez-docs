@@ -139,7 +139,7 @@ The L2 mirror, `CrossChainCall`, is field-for-field identical — only the type 
 
 `revertSpan > 0` on a call marks a **forced revert**: the next `revertSpan` calls — this one included — execute and succeed normally, but their EVM state effects are rolled back at the protocol layer. The rolling hash still commits to what actually happened (typically `success=true` with the real return data); only the destination state disappears.
 
-`revertSpan` covers a **contiguous** run of calls, and only the *first* call in that run carries the nonzero value — every other call inside the span already has `revertSpan == 0` in the entry, since it's the first call's nonzero value that triggers the self-call covering the whole span. Nesting one `revertSpan` inside another is not checked on-chain — Solidity would mechanically recurse into a second self-call if a builder emitted one — but it's a prover-convention violation, not a supported shape: a well-formed prover never emits a nested span, since the outer span's rollback already discards whatever the inner span would have rolled back.
+`revertSpan` covers a **contiguous** run of calls, and only the *first* call in that run carries the nonzero value — every other call inside the span already has `revertSpan == 0` in the entry, since it's the first call's nonzero value that triggers the self-call covering the whole span. Nesting one `revertSpan` inside another is not checked on-chain — Solidity would mechanically recurse into a second self-call if a builder emitted one. But it's a prover-convention violation, not a supported shape: a well-formed prover never emits a nested span, since the outer span's rollback already discards whatever the inner span would have rolled back.
 
 `revertSpan` is used whenever the prover determines that a call is reverted in the destination chain's view, even though the destination call itself succeeds — the trigger is that determination, not any single scenario. The most common case is a cross-chain call from rollup A to rollup B where B's destination call **succeeds**, but the prover's view of A shows that the higher-level transaction containing the call was rolled back on A (for example, because that transaction reverted on A after the call was already dispatched). B must not retain state that A no longer commits to, so the entry wraps the call in `revertSpan = 1`.
 
@@ -305,7 +305,14 @@ CALL_BEGIN(4)
 CALL_END(4, success4, returnData4)
 ```
 
-The nesting is what forces the builder to simulate the full execution graph. A reentrant call fires between `CALL_BEGIN(n)` and `CALL_END(n)` of the outer call — specifically when the destination contract calls back through a proxy during its execution. `NESTED_BEGIN` records the moment the reentrant frame starts; `NESTED_END` records when it returns. Note that `CALL_END` always tags with the *live* `_currentL2ToL1Call` cursor, not the call number captured at `CALL_BEGIN` — so the outer call's `CALL_END` reads `3`, not `1`, because the nested frame already advanced the shared cursor. `callCount` for the outer entry-level frame is 2 (calls 1 and 4 at the entry level). `expectedL1ToL2Calls[0].callCount` is 2 (calls 2 and 3 inside the reentrant frame). The partition invariant `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length` becomes `2 + 2 == 4`.
+The nesting is what forces the builder to simulate the full execution graph. A reentrant call fires between `CALL_BEGIN(n)` and `CALL_END(n)` of the outer call — specifically when the destination contract calls back through a proxy during its execution. `NESTED_BEGIN` records the moment the reentrant frame starts; `NESTED_END` records when it returns.
+
+For this example:
+
+- `CALL_END` always tags with the *live* `_currentL2ToL1Call` cursor, not the call number captured at `CALL_BEGIN` — so the outer call's `CALL_END` reads `3`, not `1`, because the nested frame already advanced the shared cursor.
+- `callCount` for the outer entry-level frame is `2` (calls 1 and 4 at the entry level).
+- `expectedL1ToL2Calls[0].callCount` is `2` (calls 2 and 3 inside the reentrant frame).
+- The partition invariant `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length` becomes `2 + 2 == 4`.
 
 ---
 
@@ -479,3 +486,9 @@ Notice that `proxyEntryHash` is **identical** on both sides — the same six has
 | `UnconsumedL1ToL2Calls` | `_lastL1ToL2CallConsumed != expectedL1ToL2Calls.length` at entry end | Every `ExpectedL1ToL2Call` must be consumed — verify reentrant calls fire in the order declared |
 | `StateRootMismatch` | `StateDelta.currentState` doesn't match the live state root at consumption | Rebuild the entry with the correct pre-state root for each rollup |
 | `ExecutionNotFound` | `proxyEntryHash` doesn't match the live call hash | Verify the six hash inputs — check that `sourceAddress`, `sourceRollupId`, and `value` are exact |
+
+## Next steps
+
+- [Post and Verify a Batch](/guides/post-verify-batch) — submit the entries you just built as part of a `ProofSystemBatchPerVerificationEntries`
+- [Using Lookup Calls](/guides/lookup-calls) — build `ExpectedLookup`/`LookupCall` entries for read-only cross-chain queries
+- [Register Your Rollup](/guides/register-rollup) — the one-time setup an entry's `destinationRollupId` depends on
