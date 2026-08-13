@@ -21,7 +21,7 @@ When a transaction on L1 triggers cross-chain calls to an L2 (or vice versa), th
 - **Matches cross-chain boundaries** by correlating `CrossChainCallExecuted` and `IncomingCrossChainCallExecuted` events.
 - **Renders a unified tree** showing L1 and L2 execution interleaved at the `executeCrossChainCall` call sites.
 
-The decoder also performs three-tier ABI resolution for decoding function calls: local compiled artifacts (from `out/`), Blockscout APIs, and 4byte.directory. The L1 (`EEZ`) and L2 (`EEZL2`) contract addresses can be pinned via two environment variables (see below).
+The decoder also performs three-tier ABI resolution for decoding function calls: local compiled artifacts (from `out/`), Blockscout APIs, and 4byte.directory. The L1 (`EEZ`) and L2 (`EEZL2`) contract addresses can be pinned via the `ROLLUPS` and `MANAGER_L2` environment variables.
 
 ## Prerequisites
 
@@ -32,13 +32,13 @@ The decoder also performs three-tier ABI resolution for decoding function calls:
 
 ## Installation
 
-## Step 1 — Navigate to the trace-decoder directory
+### Step 1 — Navigate to the trace-decoder directory
 
 ```bash
 cd trace-decoder
 ```
 
-## Step 2 — Install dependencies
+### Step 2 — Install dependencies
 
 ```bash
 npm install
@@ -46,7 +46,7 @@ npm install
 
 This installs `ethers@6.16.0` as the only runtime dependency.
 
-## Step 3 — (Optional) Build the EEZ contracts for local ABI resolution
+### Step 3 — (Optional) Build the EEZ contracts for local ABI resolution
 
 If you have the EEZ contracts compiled, the decoder automatically loads ABIs from the `out/` directory:
 
@@ -143,6 +143,15 @@ node decode-trace.mjs --tx $TX_HASH --l1-rpc $L1_RPC --l2-rpc $L2_RPC
 
 No other environment variables are inspected — arbitrary `0x`-valued variables (for example `EEZ_CONTRACT`) are **not** registered as labels.
 
+## If Tracing Fails
+
+:::note
+Most decode failures trace back to one of two causes:
+
+- **The RPC endpoint doesn't support `callTracer`.** The decoder calls `debug_traceTransaction` with `{ tracer: "callTracer" }`; if either RPC rejects that tracer or doesn't expose `debug_traceTransaction` at all, the fetch for that chain fails outright.
+- **`--l1-rpc` and `--l2-rpc` are swapped or point at the wrong pair.** The decoder trusts the flags for which endpoint is L1 and which is L2 — it does not independently verify chain IDs against the transaction hash. A mismatched pair produces missing traces or a call tree that fails to join at the `CrossChainProxy` boundary.
+:::
+
 ## Output
 
 The decoder renders a box-drawing tree to standard output. Here is the general shape of a unified L1→L2 execution:
@@ -185,3 +194,7 @@ For each call node, the decoder shows:
 `CrossChainProxy` calls are displayed as `proxy[Target@rollupN]::functionName()` to make the cross-chain boundary visually distinct from regular L1/L2 calls.
 
 Pass `--json` to receive the same information as a structured JSON object, suitable for piping into other tools or building custom visualizations on top of the trace data.
+
+## See Also
+
+- [Visualizator](/tools/visualizator) — step through the same cross-chain execution visually, either against the built-in scenarios or a live dashboard connected to real RPC endpoints.
