@@ -17,7 +17,14 @@ A `CrossChainProxy` is a minimal smart contract deployed via `CREATE2` by the EE
 
 When EEZ executes a cross-chain call on behalf of `sourceAddress` from `sourceRollupId`, it routes the execution through the proxy for that `(sourceAddress, sourceRollupId)` pair. The destination contract sees `msg.sender == proxyAddress` — a stable, predictable address that always maps to the same remote identity.
 
-The EEZ manager auto-creates a proxy the first time it encounters a new `(address, rollupId)` pair during execution (`_processNCalls` calls `_createCrossChainProxyInternal` if the proxy doesn't exist yet). You can also create proxies proactively via `createCrossChainProxy`.
+The EEZ manager auto-creates a proxy the first time it encounters a new `(address, rollupId)` pair during execution. You can also create proxies proactively via `createCrossChainProxy`.
+
+<details>
+<summary>For builders: where auto-creation happens internally</summary>
+
+`_processNCalls` calls `_createCrossChainProxyInternal` if the proxy doesn't exist yet.
+
+</details>
 
 ## Why the Proxy Exists: `msg.sender` Identity Across Chains
 
