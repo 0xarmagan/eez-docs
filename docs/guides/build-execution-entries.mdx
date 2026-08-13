@@ -135,6 +135,34 @@ struct L2ToL1Call {
 
 The L2 mirror, `CrossChainCall`, is field-for-field identical — only the type name differs.
 
+### `revertSpan`: forced-revert context
+
+`revertSpan > 0` on a call marks a **forced revert**: the next `revertSpan` calls — this one included — execute and succeed normally, but their EVM state effects are rolled back at the protocol layer. The rolling hash still commits to what actually happened (typically `success=true` with the real return data); only the destination state disappears.
+
+The canonical use case is a cross-chain call from rollup A to rollup B where B's destination call **succeeds**, but the prover's view of A shows that the higher-level transaction containing the call was rolled back on A. B must not retain state that A no longer commits to, so the entry wraps the call in `revertSpan = 1`.
+
+The processor:
+
+1. Saves the call cursor and zeroes `l2ToL1Calls[savedCallNumber].revertSpan` in storage, so the inner self-call sees the call as normal (`revertSpan == 0`) at the same index.
+2. Self-calls `executeInContextAndRevert(revertSpan)`, which processes the next `revertSpan` calls via the same call processor and then **always** reverts with `error ContextResult(bytes32 rollingHash, uint256 reentrantConsumed, uint256 callsProcessed, bool callNotFound)`.
+3. The EVM revert rolls back every transient write inside the self-call — including the rolling hash and the two cursors — and all destination state the inner calls produced.
+4. The caller decodes `ContextResult` and re-applies the rolling hash and cursors exactly as they stood at the end of the reverted span (on L1 it also OR-merges the decoded no-match flag back into the deferred revert flag, so a no-match observed inside the span still fails the entry at its boundary).
+5. Restores `l2ToL1Calls[savedCallNumber].revertSpan = revertSpan` so storage matches what the proof committed to.
+
+#### When `revertSpan` is the right tool
+
+Use `revertSpan > 0` only when a call **would succeed** but its state must not survive. For a destination that naturally reverts, `revertSpan = 0` is correct and simpler: the proxy `.call` already returns `(success=false, retData)`, `CALL_END` hashes that outcome, and the destination's own revert rolls back its own state. Wrapping a single naturally-reverting call in `revertSpan = 1` produces the same rolling hash and the same on-chain state as `revertSpan = 0` — it just adds an extra self-call frame for nothing.
+
+Reentrant calls that revert (a destination that `try/catch`es a reentrant cross-chain call) take a third, distinct path — a nested `ExpectedLookup` with `failed = true` — never `revertSpan`, never `ExpectedL1ToL2Call`. Three situations, three tools:
+
+| Situation | Tool |
+| --- | --- |
+| Top-level call that naturally reverts | Top-level `LookupCall` with `failed = true`; or, if the call lives inside `l2ToL1Calls[]`, `revertSpan = 0` and let `CALL_END(false, retData)` capture it |
+| Reentrant call that reverts (caller wraps it in `try/catch`) | Nested `ExpectedLookup` with `failed = true` inside the entry |
+| Successful call(s) whose state must be force-reverted | `revertSpan > 0` on the first call of the span |
+
+> **For builders:** the self-call target is `executeInContextAndRevert(uint256 callCount)`, guarded by `if (msg.sender != address(this)) revert NotSelf();`, and the revert payload is `error ContextResult(bytes32 rollingHash, uint256 reentrantConsumed, uint256 callsProcessed, bool callNotFound)` — both declared in `src/EEZ.sol` / `src/base/EEZBase.sol`.
+
 ### `ExpectedL1ToL2Call`
 
 Each element of `expectedL1ToL2Calls[]` is the pre-computed result for one successful reentrant call. When the destination contract calls back through a proxy during entry execution, `_consumeNestedAction` matches sequentially against this array.
