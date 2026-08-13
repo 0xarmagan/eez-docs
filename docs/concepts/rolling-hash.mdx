@@ -119,7 +119,7 @@ entry.callCount            = 3
 entry.expectedL1ToL2Calls = [{ callCount: 2, returnData: retData_1_and_2_owner }]
 ```
 
-This exact pattern — the outer call's `CALL_END` folding in the cursor value *after* the nested frame advanced it — is what the protocol's own end-to-end fixtures build against (`script/e2e/deepNested/E2E.s.sol` constructs this hash chain literally with `RollingHashBuilder`, tagging the outer call's end with the post-nesting cursor value rather than its own call number).
+This exact pattern — the outer call's `CALL_END` folding in the cursor value *after* the nested frame advanced it — is exercised by the protocol's own end-to-end fixtures (`script/e2e/deepNested/E2E.s.sol` builds its own hash chain with `RollingHashBuilder` around a different call structure — a single top-level call with two *nested* levels of depth, rather than this page's three top-level calls with one nested frame of two siblings — but it hits the same mechanism: the outer call's `CALL_END` tags with the post-nesting cursor value, not its own `CALL_BEGIN` number).
 
 </details>
 
