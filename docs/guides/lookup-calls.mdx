@@ -182,7 +182,9 @@ LookupCall memory lookup = LookupCall({
 
 When `staticCallLookup` scans the pool outside an execution, it skips any candidate whose `expectedStateRoots` pins do not all equal their respective live state roots (in addition to requiring `crossChainCallHash` and `destinationRollupId` to match). This means you pin the lookup to a specific cross-rollup interleaving — the read is only valid at the exact point in the batch where those rollup states hold.
 
-An empty `expectedStateRoots` array matches unconditionally, which is appropriate for reads that do not depend on any particular rollup state.
+**`expectedStateRoots` can never be empty in practice.** `postAndVerifyBatch`'s structural validation (`_validateStructure`) requires every `LookupCall`'s own `destinationRollupId` to appear among its `expectedStateRoots` pins — `_contains(verifiedRollups, lc.destinationRollupId)`, where `verifiedRollups` is built solely from that lookup's own pins — reverting `LookupDestinationNotPinned` otherwise. An empty array has no pins to satisfy this, so it is **rejected at publish time**, not accepted as a match-anything wildcard. This check is unconditional (not gated by `failed`) and applies at construction/publish time, distinct from the live-state-root check `staticCallLookup` runs at resolution time.
+
+The one mandatory pin is the lookup's own `destinationRollupId` — the worked example above satisfies this by pinning exactly `rollupId: 1` for a `destinationRollupId: 1` lookup. `expectedStateRoots` may also carry *additional* pins for other rollups in the batch (any rollup covered by the batch's own `StateDelta`/pin set), which further narrows the lookup to a specific cross-rollup interleaving beyond just its own destination.
 
 ### How CrossChainProxy Routes to staticCallLookup
 
@@ -299,7 +301,8 @@ Most of these rules are enforced on-chain **only when a lookup is actually consu
 - Static sub-calls use the **untagged** hash (`keccak256(prev, success, retData)` per sub-call, run by `_processNStaticCalls`); reverted-lookup sub-executions use the **tagged** hash (run by `_processNCalls`). Using the wrong schema fails `RollingHashMismatch` regardless of which route resolves the entry.
 - A nested `ExpectedLookup` resolves only from the active host's `expectedLookups[]`; a top-level `LookupCall` resolves only from the pool and only when `!_insideExecution()`.
 - Which *function* resolves a lookup depends on the caller's opcode, not on `failed`: a `STATICCALL` always resolves through `staticCallLookup` (returns `returnData`, or reverts with it if `failed == true`); a regular `CALL` can only resolve a `failed == true` lookup, and only via the miss-path fallback into `_executeRevertedNestedLookup` / `_executeRevertedTopLevelLookup` (always reverts with `returnData`).
+- Enforced at **publish time** (not resolution time), for every `LookupCall` regardless of `failed`: `expectedStateRoots` must include a pin for the lookup's own `destinationRollupId` — `postAndVerifyBatch`'s structural validation reverts `LookupDestinationNotPinned` otherwise. An empty `expectedStateRoots` array always fails this and can never be published.
 
 :::note
-For top-level lookups, the prover decides which rollups to pin in `expectedStateRoots`. An empty array is valid and matches unconditionally. Pin aggressively when the cached read must be consistent with a specific cross-rollup interleaving; omit pins for reads that are state-independent.
+For top-level lookups, the prover chooses which *additional* rollups to pin in `expectedStateRoots` beyond the one mandatory pin for the lookup's own `destinationRollupId` (see above — an empty array is rejected at publish time, it does not match unconditionally). Pin more rollups when the cached read must be consistent with a specific cross-rollup interleaving; stick to just the mandatory destination pin for reads that don't otherwise depend on rollup state.
 :::

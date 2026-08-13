@@ -55,3 +55,28 @@ This was a mechanism-level fix, not a wording patch: the previous page had exact
 
 - I did not exhaustively re-verify every pre-existing, unflagged sentence on the page against source (e.g. the `executingLookupIndex` section, the balance-read worked example) — only the sections implicated by the four findings and their immediate neighbors, since the task scoped "Resolution Mechanics" and its self-contradictions. A quick pass suggests the untouched sections were already accurate and consistent with the fixes.
 - The `LOOKUP_SPEC.md` citation on line 101 ("Source: `LOOKUP_SPEC.md` §3...") was left as-is since it wasn't part of the flagged findings and I did not have that spec doc available to verify it independently.
+
+---
+
+## Follow-up Fix (post adversarial re-check): `expectedStateRoots` empty-array claim
+
+**Was wrong:** State Root Binding section and the closing `:::note` both claimed an empty `expectedStateRoots` array "matches unconditionally" / "is valid."
+
+**Real mechanism:** `postAndVerifyBatch`'s structural validation, `_validateStructure` (`src/EEZ.sol:562-583`), requires every `LookupCall`'s own `destinationRollupId` to appear among its `expectedStateRoots` pins:
+```solidity
+if (!_contains(verifiedRollups, lc.destinationRollupId)) {
+    revert LookupDestinationNotPinned(lc.destinationRollupId);
+}
+```
+where `verifiedRollups` is built solely from that `LookupCall`'s own `pins` (`expectedStateRoots`), strictly-increasing-by-rollupId and each required to be `_containsRollupInBatch`. An empty `expectedStateRoots` array yields an empty `verifiedRollups`, so the `_contains` check always fails — **every** `LookupCall` is rejected at publish time unless it pins at least its own `destinationRollupId`. This check is unconditional (not gated by `failed`) and runs at **publish time** (structural validation, before proof verification), distinct from the live-state-root equality check `staticCallLookup`/`_stateRootsMatch` runs at **resolution time**. The page's own worked example (pinning `rollupId: 1` for `destinationRollupId: 1`) was already consistent with the real rule — only the surrounding prose was wrong.
+
+Exact requirement verified: `expectedStateRoots` must contain a pin for the lookup's own `destinationRollupId` (mandatory, minimum one entry); it may additionally carry pins for any other rollup covered by the batch (validated via `_containsRollupInBatch`), which is the mechanism for pinning a specific cross-rollup interleaving beyond just the destination.
+
+**Fix:**
+- Rewrote the "State Root Binding (L1)" section: removed the "empty array matches unconditionally" claim, replaced with the real `LookupDestinationNotPinned` publish-time requirement, and clarified additional pins are optional/allowed but the destination pin is mandatory.
+- Rewrote the closing `:::note`: removed "empty array is valid," reframed around the prover choosing *additional* pins beyond the one mandatory destination pin.
+- Added a new Invariants Summary bullet: `expectedStateRoots` must include the lookup's own `destinationRollupId`, enforced at publish time via `_validateStructure`/`LookupDestinationNotPinned`, for every `LookupCall` regardless of `failed`.
+
+**Build:** `npm run build` — exit 0, no broken-link warnings.
+
+**Self-review:** Confirmed no remaining "matches unconditionally" / "empty array is valid" language anywhere in the file (grep-verified). The three touched spots (State Root Binding prose, Invariants Summary, closing note) now tell one consistent story: `expectedStateRoots` is never legitimately empty for a published `LookupCall`; the mandatory content is the lookup's own destination pin, with room for additional pins layered on top.
