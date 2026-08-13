@@ -5,6 +5,9 @@ description: "Learn how EEZ enables atomic, same-block cross-rollup calls by pre
 ---
 
 import DiagramMotion from '@site/src/components/DiagramMotion';
+import UnauditedWarning from '../_unaudited-warning.mdx'
+
+<UnauditedWarning />
 
 Ethereum's rollup ecosystem fragments liquidity and composability: when your contract on one rollup calls a contract on another, you normally wait minutes or hours for a bridge message to settle, destroying the tight execution guarantees that make DeFi primitives possible. EEZ removes that wait entirely by committing to the full outcome of every cross-chain interaction before any on-chain state changes — letting you compose across rollups as freely as you compose within a single chain.
 
@@ -26,12 +29,12 @@ EEZ's atomicity guarantee rests on one architectural premise: all participating 
 
 ## The Pre-Compute-Then-Replay Model
 
-EEZ's core insight is that you can move all the uncertainty off-chain. Before anything touches the blockchain, the rollup node simulates the entire cross-chain interaction — every contract call, every return value, every reentrant callback — against the current state of all involved chains. The results of that simulation are packaged into `ExecutionEntry` structs and submitted to L1 along with a zero-knowledge proof attesting that the simulation was faithful to each chain's state transition rules.
+EEZ's core insight is that you can move all the uncertainty off-chain. Before anything touches the blockchain, the rollup node simulates the entire cross-chain interaction — every contract call, every return value, every reentrant callback — against the current state of all involved chains. The results of that simulation are packaged into `ExecutionEntry` structs and submitted to L1 along with an attestation that the simulation was faithful to each chain's state transition rules. Today that attestation is an M-of-N multi-prover signature set (ECDSA-based); EEZ's target architecture replaces it with a zero-knowledge proof — see below.
 
 On-chain, EEZ doesn't re-discover what happened; it replays a pre-approved script:
 
 1. **Off-chain**: The rollup node simulates the full execution tree, records every call's return data, and computes a `rollingHash` that commits to the entire sequence of events.
-2. **Proof generation**: A ZK proof (or M-of-N multi-prover attestation) is generated, binding the execution entries to specific state roots on each rollup.
+2. **Proof generation**: An M-of-N multi-prover attestation — ECDSA signatures today, a ZK proof in EEZ's target architecture — is generated, binding the execution entries to specific state roots on each rollup.
 3. **`postAndVerifyBatch`**: The L1 EEZ contract verifies the proof, loads the entries, and executes any immediate work. Deferred entries are queued per-rollup, ready for consumption in the same block.
 4. **Consumption**: When your contract calls a cross-chain proxy, the proxy forwards the call to EEZ, which replays the pre-approved entry — verifying the rolling hash at the end to confirm nothing diverged from the simulation.
 
