@@ -139,7 +139,9 @@ The L2 mirror, `CrossChainCall`, is field-for-field identical — only the type 
 
 `revertSpan > 0` on a call marks a **forced revert**: the next `revertSpan` calls — this one included — execute and succeed normally, but their EVM state effects are rolled back at the protocol layer. The rolling hash still commits to what actually happened (typically `success=true` with the real return data); only the destination state disappears.
 
-The canonical use case is a cross-chain call from rollup A to rollup B where B's destination call **succeeds**, but the prover's view of A shows that the higher-level transaction containing the call was rolled back on A. B must not retain state that A no longer commits to, so the entry wraps the call in `revertSpan = 1`.
+`revertSpan` covers a **contiguous** run of calls, and only the *first* call in that run carries the nonzero value — every other call inside the span already has `revertSpan == 0` in the entry, since it's the first call's nonzero value that triggers the self-call covering the whole span. Nesting one `revertSpan` inside another is not checked on-chain — Solidity would mechanically recurse into a second self-call if a builder emitted one — but it's a prover-convention violation, not a supported shape: a well-formed prover never emits a nested span, since the outer span's rollback already discards whatever the inner span would have rolled back.
+
+`revertSpan` is used whenever the prover determines that a call is reverted in the destination chain's view, even though the destination call itself succeeds — the trigger is that determination, not any single scenario. The most common case is a cross-chain call from rollup A to rollup B where B's destination call **succeeds**, but the prover's view of A shows that the higher-level transaction containing the call was rolled back on A (for example, because that transaction reverted on A after the call was already dispatched). B must not retain state that A no longer commits to, so the entry wraps the call in `revertSpan = 1`.
 
 The processor:
 
@@ -157,11 +159,11 @@ Reentrant calls that revert (a destination that `try/catch`es a reentrant cross-
 
 | Situation | Tool |
 | --- | --- |
-| Top-level call that naturally reverts | Top-level `LookupCall` with `failed = true`; or, if the call lives inside `l2ToL1Calls[]`, `revertSpan = 0` and let `CALL_END(false, retData)` capture it |
+| Top-level call that naturally reverts | Top-level `LookupCall` with `failed = true`; or, if the call lives inside `l2ToL1Calls[]` / `incomingCalls[]`, `revertSpan = 0` and let `CALL_END(false, retData)` capture it |
 | Reentrant call that reverts (caller wraps it in `try/catch`) | Nested `ExpectedLookup` with `failed = true` inside the entry |
 | Successful call(s) whose state must be force-reverted | `revertSpan > 0` on the first call of the span |
 
-> **For builders:** the self-call target is `executeInContextAndRevert(uint256 callCount)`, guarded by `if (msg.sender != address(this)) revert NotSelf();`, and the revert payload is `error ContextResult(bytes32 rollingHash, uint256 reentrantConsumed, uint256 callsProcessed, bool callNotFound)` — both declared in `src/EEZ.sol` / `src/base/EEZBase.sol`.
+> **For builders:** the self-call target is `executeInContextAndRevert(uint256 callCount)`, guarded by `if (msg.sender != address(this)) revert NotSelf();`, and the revert payload is `error ContextResult(bytes32 rollingHash, uint256 reentrantConsumed, uint256 callsProcessed, bool callNotFound)`. The mechanism is L1/L2-symmetric: L1's version lives in `src/EEZ.sol`, L2 has its own identically-guarded `executeInContextAndRevert` in `src/L2/EEZL2.sol`, and both errors are declared once on the shared `src/base/EEZBase.sol`. The one real difference is the trailing `callNotFound` flag — L2 always passes `false`, since L2 has no deferred no-match flag to carry across the revert boundary.
 
 ### `ExpectedL1ToL2Call`
 
