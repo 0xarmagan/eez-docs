@@ -82,35 +82,35 @@ The length of `proofSystemIndex[]` must meet or exceed the rollup's configured t
 
 `postAndVerifyBatch` executes the following steps in strict order. Any failure at any step reverts the entire call — there is no partial-batch state.
 
-## Step 1 — Reentry guard
+### Step 1 — Reentry guard
 
 Reverts `PostBatchReentry` if `_transientExecutions.length != 0` — i.e., another batch is already mid-flight in this transaction (typically because a meta-hook re-entered `postAndVerifyBatch`).
 
-## Step 2 — Structural validation
+### Step 2 — Structural validation
 
 Confirms all sorted-ascending invariants (`proofSystems[]`, `rollupIdsWithProofSystems[]`, every `proofSystemIndex[]`), rollup membership, and transient-count bounds. No external calls. See the [validation error table](#validation-constraints-enforced-on-chain) below for the exhaustive list.
 
-## Step 3 — Fetch vkeys and verify proofs
+### Step 3 — Fetch vkeys and verify proofs
 
 For each rollup, calls `IRollupContract.checkProofSystemsAndGetVkeys(subset)` as a `STATICCALL` to fetch the vkey matrix (the STATICCALL prevents a malicious manager from mutating state). Builds the shared and per-proof-system public inputs hashes, then calls `IProofSystem.verify(proof, publicInputsHash)` for every proof system. All proofs must pass — one failure reverts with `InvalidProof`.
 
-## Step 4 — Mark verified-this-block
+### Step 4 — Mark verified-this-block
 
 Sets `lastVerifiedBlock = block.number` for each participating rollup and wipes its execution queue, lookup queue, and cursor. A same-block re-verify **replaces** (not appends to) the prior batch's entries for that rollup.
 
-## Step 5 — Load the transient stream
+### Step 5 — Load the transient stream
 
 Copies the leading `transientExecutionEntryCount` entries into `_transientExecutions` and the leading `transientLookupCallCount` lookup calls into `_transientLookupCalls`. These are immediately available for consumption within the same transaction.
 
-## Step 6 — Drain immediate entries inline
+### Step 6 — Drain immediate entries inline
 
 While the next transient entry has `proxyEntryHash == bytes32(0)`, self-calls `attemptApplyImmediate`. A reverting immediate entry emits `ImmediateEntrySkipped` and the loop advances — it is not a fatal error.
 
-## Step 7 — Meta hook
+### Step 7 — Meta hook
 
 If transient entries remain and `msg.sender` has code, calls `IMetaCrossChainReceiver(msg.sender).executeMetaCrossChainTransactions()`. The caller can consume any remaining transient entries by calling back through cross-chain proxies in the same transaction.
 
-## Step 8 — Cleanup and publish
+### Step 8 — Cleanup and publish
 
 Deletes the transient tables, resets the transient cursor, then unconditionally pushes the remaining (post-transient) entries into per-rollup persistent queues, keyed by `destinationRollupId`, for consumption via `executeCrossChainCall` or `executeL2TX` in the same block.
 
@@ -122,6 +122,8 @@ Deletes the transient tables, resets the transient cursor, then unconditionally 
   alt="The postAndVerifyBatch internal pipeline: validate, verify all proofs, mark rollups verified, load and drain transient entries, meta hook, publish to per-rollup queues."
   caption="What postAndVerifyBatch does internally, in order."
 />
+
+The happy path above assumes every proof verifies. The diagram below shows the failure path — what happens at Step 3 when a required proof system rejects a proof.
 
 <DiagramMotion
   src="/motion/post-verify-fail.webm"
@@ -249,3 +251,9 @@ executeL2TX          → requires lastVerifiedBlock(rollupId) == block.number
 ```
 
 Entries not consumed in their posting block are stranded — the `lastVerifiedBlock` gate prevents consumption in any later block, and the next `postAndVerifyBatch` that touches the rollup will wipe and replace the queue. Design your batch and your consumption transactions to complete within the same block as the `postAndVerifyBatch` call.
+
+## Next steps
+
+- [Build ExecutionEntry Structs](/guides/build-execution-entries) — construct the `ExecutionEntry` and `LookupCall` values this batch struct carries
+- [Using Lookup Calls](/guides/lookup-calls) — how top-level lookups move through the transient/persistent split described in Steps 5–8
+- [Cross-Rollup Flash Loans](/guides/flash-loans) — a worked example that bundles `postAndVerifyBatch` with same-block consumption
