@@ -4,7 +4,7 @@ sidebar_label: "IProofSystem"
 description: "Reference for IProofSystem.sol — the interface every proof-verifying contract must implement to participate in EEZ batch verification."
 ---
 
-`IProofSystem` is the single-function interface that any proof verifier must implement to participate in EEZ batch verification. A proof system is any contract capable of checking whether a given proof is valid for a particular set of public inputs. EEZ intentionally places no restrictions on what cryptographic scheme you use: ZK-SNARK/STARK verifiers, ECDSA multisig contracts, BLS aggregation schemes, and trivially-accepting mock contracts for testing all satisfy the interface equally. There is no central registry of proof systems — each rollup's `IRollupContract` manager maintains its own allowed set.
+`IProofSystem` is the single-function interface that any proof verifier must implement to participate in EEZ batch verification. A proof system is any contract capable of checking whether a given proof is valid for a particular set of public inputs. EEZ intentionally places no restrictions on what cryptographic scheme you use: ZK-SNARK/STARK verifiers, ECDSA multisig contracts, BLS aggregation schemes, and trivially-accepting mock contracts for testing all satisfy the interface equally. There is no central registry of proof systems — each rollup's [`IRollupContract`](/contracts/interfaces/irollupcontract) manager maintains its own allowed set.
 
 ## Interface Definition
 
