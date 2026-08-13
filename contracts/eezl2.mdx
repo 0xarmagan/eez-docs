@@ -24,6 +24,7 @@ import UnauditedWarning from '../docs/_unaudited-warning.mdx'
 | `lookupCalls` | `LookupCall[]` | The array of pre-computed top-level lookup call results currently loaded, resolved via `staticCallLookup` or the reverted-lookup fallback. Replaced wholesale alongside `executions`. |
 | `lastLoadBlock` | `uint256` | The block number of the most recent `loadExecutionTable` or `executeIncomingCrossChainCall` call. Entries can only be consumed in this same block. |
 | `executionIndex` | `uint256` | The cursor into the `executions` array pointing to the next entry to be consumed. Advances by one per successful `executeCrossChainCall` top-level call. |
+| `authorizedProxies` | `mapping(address => ProxyInfo)` (public, inherited from `EEZBase`) | Maps a deployed `CrossChainProxy` address to the `(originalAddress, originalRollupId)` pair it represents. A zero `originalAddress` means the address is not a registered proxy. Populated by `createCrossChainProxy` and checked by `executeCrossChainCall`/`staticCallLookup`. |
 
 ## Trust Model
 
@@ -136,7 +137,7 @@ function executeCrossChainCall(
 
 Consumes the next execution entry and drives its flat call array through the processor. Only registered proxy contracts may call this function — the caller's address is looked up in the `authorizedProxies` registry; an unregistered address reverts with `UnauthorizedProxy`.
 
-When called outside an active execution (`_insideExecution() == false`), the function advances `executionIndex`, sets up fresh transient state, and drives the full entry. When called during an active execution — meaning a destination contract called back into the manager via a proxy — the function routes to `_consumeNestedAction` instead, consuming the next `ExpectedOutgoingCrossChainCall` from the active entry's reentrant table without advancing `executionIndex`.
+When called outside an active execution (`_insideExecution() == false`), the function advances `executionIndex`, sets up fresh transient state, and drives the full entry. When called during an active execution — meaning a destination contract called back into the manager via a proxy — the function routes to `_consumeNestedAction` instead, consuming the next `ExpectedOutgoingCrossChainCall` from the active execution host's reentrant table (the entry, or — when resolving inside a reverted lookup — that lookup's own `expectedOutgoingCalls`) without advancing `executionIndex`.
 
 Any ETH attached to the call (`msg.value > 0`) is immediately forwarded to `SYSTEM_ADDRESS`. This is the L2 ETH burn: the protocol does not retain ETH on the L2 manager contract.
 
@@ -179,7 +180,7 @@ function staticCallLookup(
 
 Resolves a pre-computed lookup result for a read-only (STATICCALL) cross-chain call. Only registered proxy contracts may call this function. The proxy's fallback automatically routes to `staticCallLookup` instead of `executeCrossChainCall` when it detects it is operating inside a STATICCALL frame (via its `staticCheck` self-call mechanism).
 
-Inside an active execution, the function scans the current entry's `expectedLookups` array for a match on the four-tuple `(crossChainCallHash, callNumber, lastOutgoingCallConsumed, executingLookupIndex)`. Outside an active execution, it scans the persistent `lookupCalls` pool, matching by `crossChainCallHash` alone (L2 has no state roots to pin against).
+Inside an active execution, the function scans the active execution host's `expectedLookups` array (the entry's, or — when resolving inside a reverted lookup — that lookup's own table) for a match on the four-tuple `(crossChainCallHash, callNumber, lastOutgoingCallConsumed, executingLookupIndex)`. Outside an active execution, it scans the persistent `lookupCalls` pool, matching by `crossChainCallHash` alone (L2 has no state roots to pin against).
 
 In both cases, if the matched lookup has `failed == true`, the function reverts with the stored `returnData`, allowing the caller's `try/catch` to observe the pre-computed revert. If `failed == false`, it returns `returnData` as a successful result. Any sub-calls declared in the lookup's `incomingCalls` are always executed as STATICCALLs and their rolling hash is verified against the lookup's `rollingHash` before returning.
 
@@ -289,3 +290,4 @@ Computes the deterministic CREATE2 address for a `CrossChainProxy` without deplo
 | `OutgoingCallConsumed(uint256 entryIndex, uint256 nestedNumber, bytes32 crossChainCallHash, uint256 callCount)` | Emitted when a reentrant (outgoing) cross-chain call is matched and consumed. |
 | `RevertSpanExecuted(uint256 entryIndex, uint256 startCallNumber, uint256 span)` | Emitted after a `revertSpan` self-call completes and state is rolled back. |
 | `CrossChainProxyCreated(address indexed proxy, address indexed originalAddress, uint256 indexed originalRollupId)` | Emitted when a new `CrossChainProxy` is deployed and registered via `createCrossChainProxy`. |
+| `CrossChainCallExecuted(bytes32 indexed crossChainCallHash, address indexed proxy, address sourceAddress, bytes callData, uint256 value)` | Emitted by `executeCrossChainCall` (inherited from `EEZBase`) whenever a registered proxy dispatches a cross-chain call, before the matching execution entry or reentrant action is consumed. |
