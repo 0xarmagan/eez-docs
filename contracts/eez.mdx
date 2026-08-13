@@ -10,10 +10,6 @@ import UnauditedWarning from '../docs/_unaudited-warning.mdx'
 
 The `EEZ` contract is the heart of the EEZ protocol on Ethereum mainnet. It serves as a permissionless registry for rollups, accepts multi-prover batch submissions that advance state roots, and provides the execution surface through which cross-chain proxy calls are routed and fulfilled. Every rollup's state root, ether balance, and deferred execution queue live here; per-rollup configuration (proof systems, verification keys, ownership, and threshold) live on a separate `IRollupContract`-conforming manager that `EEZ` calls into during verification.
 
-:::info
-**Early-stage implementation.** EEZ has not undergone an external security audit. Interfaces, storage layout, error semantics, and execution flow are expected to change. Do not use for value-bearing deployments.
-:::
-
 ---
 
 ## Constants
@@ -42,8 +38,6 @@ The `EEZ` contract is the heart of the EEZ protocol on Ethereum mainnet. It serv
 `registerRollup` is the permissionless entry point for onboarding a new rollup. You first deploy your `IRollupContract`-conforming manager (see [`Rollup.sol`](/contracts/rollup)) with the desired proof systems, verification keys, threshold, and ownership baked in, then call this function to register it. The registry assigns a fresh `rollupId`, stores your initial state root, and fires a one-shot `rollupContractRegistered(rollupId)` callback on your manager so it learns its assigned ID.
 
 **Who can call it:** Anyone.
-
-**Reverts if:** `rollupContract` is `address(0)` or the `EEZ` registry contract itself.
 
 **Emits:** `RollupCreated(rollupId, rollupContract, initialState)`
 
@@ -483,22 +477,22 @@ function executionQueueIndex(uint256 _rollupId) external view returns (uint256)
 
 ## Key Structs
 
-### `ProofSystemBatchPerVerificationEntries`
+### [`ProofSystemBatchPerVerificationEntries`](/contracts/data-types#proofsystembatchperverificationentries)
 
 The top-level batch struct you pass to `postAndVerifyBatch`. It bundles the execution entries, top-level lookup calls, proof systems, per-rollup PS subsets, ZK proofs, blob indices, calldata, and block context.
 
-### `ExecutionEntry`
+### [`ExecutionEntry`](/contracts/data-types#executionentry-l1)
 
 Represents one unit of cross-chain execution. Contains `stateDeltas` (pre/post state roots and ether deltas per rollup), `proxyEntryHash` (the `crossChainCallHash` a proxy must present to consume this entry via `executeCrossChainCall` — `bytes32(0)` for a pure L2 transaction consumed via `executeL2TX`), `destinationRollupId` (which rollup's queue this entry is published under), a flat `l2ToL1Calls` array of all calls in execution order, a `expectedL1ToL2Calls` table for reentrant call pre-computation, `expectedLookups` for nested static/reverted reads, `callCount` for the top-level call partition, pre-computed `returnData`, and the expected `rollingHash`.
 
-### `StateDelta`
+### [`StateDelta`](/contracts/data-types#statedelta)
 
 Describes one rollup's state transition within an entry: `rollupId`, `currentState` (pre-state checked on-chain against `rollups[rollupId].stateRoot`), `newState`, and signed `etherDelta`.
 
-### `LookupCall`
+### [`LookupCall`](/contracts/data-types#lookupcall-l1)
 
 A top-level pre-computed result for a cross-chain call that should be looked up rather than executed. Lives in the transient pool or the rollup's persistent `lookupQueue`. Matched by `crossChainCallHash` \+ state-root pins \+ `destinationRollupId`.
 
-### `RollupConfig`
+### [`RollupConfig`](/contracts/data-types#rollupconfig)
 
 The per-rollup record held by the central registry: `rollupContract` (the manager), `stateRoot`, and `etherBalance`.
