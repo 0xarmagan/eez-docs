@@ -30,6 +30,7 @@ const sidebars = {
         'concepts/rolling-hash',
         'concepts/multi-prover',
         'concepts/cross-chain-proxy',
+        'concepts/blob-format',
       ],
     },
     {
