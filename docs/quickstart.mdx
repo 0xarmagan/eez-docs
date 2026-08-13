@@ -4,11 +4,13 @@ sidebar_label: "Quickstart"
 description: "Deploy EEZ on L1 and EEZL2 on L2 using Foundry and Anvil, register a rollup, post a batch, and execute your first cross-rollup call end-to-end."
 ---
 
+import UnauditedWarning from './_unaudited-warning.mdx'
+
 This guide walks you through deploying EEZ locally and running the `helloWorld` end-to-end scenario — a two-sided cross-rollup call where a contract on L1 calls `getWord()` on a contract on L2 and receives back the string `"World"` atomically in one L1 block. You'll use two local Anvil nodes to simulate L1 and L2, deploy all the necessary contracts, and drive the full execution flow.
 
-:::warning
-EEZ is early-stage and unaudited. Run these steps on local test networks only. Never use the `AcceptAllProofSystem` from the examples in any environment that handles real value.
-:::
+<UnauditedWarning />
+
+Run these steps on local test networks only — never use the `AcceptAllProofSystem` from the examples in any environment that handles real value.
 
 ## Prerequisites
 
@@ -28,7 +30,7 @@ cd eez-core-protocol
 forge build
 ```
 
-Verify the build succeeds with no errors before proceeding. You can run the full test suite to confirm everything is working:
+Verify the build succeeds with no errors before proceeding. Running the full test suite is optional but recommended to confirm everything is working:
 
 ```bash
 forge test
@@ -63,7 +65,7 @@ export DEPLOYER=0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
 
 ## Step 3 — Deploy EEZ on L1 and EEZL2 on L2
 
-The `DeployEEZL1` script deploys the core `EEZ` registry contract, a mock `AcceptAllProofSystem` (accepts every proof, for local development only), and a `Rollup` manager contract pre-configured for rollup ID 1.
+The `DeployEEZL1` script deploys the core `EEZ` registry contract, a mock `AcceptAllProofSystem` (accepts every proof, for local development only), and a `Rollup` manager contract requiring 1-of-1 proof-system attestation.
 
 ```bash
 L1_OUTPUT=$(forge script script/e2e/shared/DeployInfra.s.sol:DeployEEZL1 \
@@ -82,6 +84,12 @@ echo "Proof System:     $PROOF_SYSTEM"
 echo "L2 Rollup Mgr:    $L2_ROLLUP_MGR"
 ```
 
+`$ROLLUPS` is the single, central `EEZ` registry contract's address on L1 — despite the plural-sounding name, there's only one per deployment; every rollup registers into it.
+
+`$L2_ROLLUP_MGR` is the L1 `Rollup` manager contract for the L2 rollup — it governs proof-system membership and the M-of-N threshold, and is captured here for reference only (no later command in this guide needs it). Don't confuse it with `$MANAGER_L2` below, which is the `EEZL2` contract deployed **on** the L2 node — a different contract, on a different chain, with a similarly-named variable.
+
+> If any of `$ROLLUPS`, `$PROOF_SYSTEM`, or `$L2_ROLLUP_MGR` comes back empty, run `echo "$L1_OUTPUT"` and confirm the script actually printed a matching `KEY=value` line — a reverted or failed broadcast produces no line for `grep` to match.
+
 The `DeployEEZL1` script registers the L2 rollup automatically. The first registered rollup always receives rollup ID 1 (ID 0 is reserved for L1 mainnet itself).
 
 Now deploy the `EEZL2` contract on the L2 node. This contract receives system-loaded execution tables from the sequencer (your `DEPLOYER` address acts as the system address in local testing):
@@ -98,15 +106,17 @@ export MANAGER_L2=$(echo "$L2_OUTPUT" | grep "MANAGER_L2=" | sed 's/.*MANAGER_L2
 echo "EEZL2 (L2): $MANAGER_L2"
 ```
 
-## Step 4 — Register the rollup (already done by DeployEEZL1)
+## Aside — how rollup registration works (reference only)
 
-The `DeployEEZL1` script handles registration for you in the quickstart, but it's worth understanding what `registerRollup` does so you can replicate it for your own rollup.
+The `DeployEEZL1` script already handled registration for you above. This section explains what `registerRollup` does under the hood, so you can replicate it for your own rollup.
 
 Before calling `registerRollup`, deploy a `Rollup` manager contract that specifies:
 - The EEZ registry address
 - The initial owner
 - The M-of-N proof threshold
 - An array of allowed proof system addresses and their verification keys
+
+The snippet below is illustrative Solidity, not something to run directly — `eez`, `myProofSystem`, and `initialStateRoot` are placeholders you'd define in your own deployment script.
 
 ```solidity
 address[] memory proofSystems = new address[](1);
@@ -137,11 +147,12 @@ Verify the registration on-chain:
 
 ```bash
 cast call $ROLLUPS "rollups(uint256)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
-# Returns: (managerAddress, initialStateRoot, etherBalance)
-# e.g.    (0x5FbDB...,     0xabcd...,           0)
+# Returns: (managerAddress, stateRoot, etherBalance)
+# e.g.    (0x5FbDB...,     0xabcd...,    0)
+# stateRoot is mutable going forward — it just still equals the initial value here.
 ```
 
-## Step 5 — Deploy the Hello World contracts
+## Step 4 — Deploy the Hello World contracts
 
 The Hello World scenario uses two contracts: `HelloWorldL1` on L1 (calls the L2 contract through the proxy) and `HelloWorldL2` on L2 (returns a greeting string). Deploy `HelloWorldL2` on L2 first so you have its address before deploying the L1 side:
 
@@ -170,7 +181,11 @@ echo "Proxy:        $HELLO_WORLD_PROXY"
 echo "HelloWorldL1: $HELLO_WORLD_L1"
 ```
 
-## Step 6 — Post a batch via `postAndVerifyBatch`
+`$HELLO_WORLD_PROXY` is captured for reference (e.g. to inspect the CREATE2 proxy on-chain) — later steps call through `$HELLO_WORLD_L1` instead and don't need it directly.
+
+> If `$HELLO_WORLD_L2`, `$HELLO_WORLD_PROXY`, or `$HELLO_WORLD_L1` comes back empty, run `echo "$L2_HW_OUTPUT"` / `echo "$L1_HW_OUTPUT"` and confirm the script printed the matching `KEY=value` line — check `$ROLLUPS` and `$HELLO_WORLD_L2` are still set from earlier steps first, since the `Deploy` script depends on both.
+
+## Step 5 — Post a batch via `postAndVerifyBatch`
 
 The `Execute` script constructs the `ProofSystemBatchPerVerificationEntries` struct, posts it on L1, and immediately calls `HelloWorldL1.helloL2World()` to consume the entry. The batch contains one execution entry for rollup ID 1 with:
 
@@ -200,7 +215,7 @@ You should see output similar to:
 
 The `greeting=World` line confirms that `HelloWorldL1.helloL2World()` successfully called through the proxy, consumed the execution entry from the queue, and returned `"World"` — all within the same L1 block as `postAndVerifyBatch`.
 
-## Step 7 — Execute the L2 side
+## Step 6 — Execute the L2 side
 
 The L2 node's system address (your deployer in local testing) drives the L2 execution independently. Call `ExecuteL2` to simulate the system loading and executing the L2 entry via `EEZL2.executeIncomingCrossChainCall`:
 
@@ -214,11 +229,21 @@ HELLO_WORLD_L1=$HELLO_WORLD_L1 \
   --private-key $PK 2>&1
 ```
 
+You should see output similar to:
+
+```text
+== Logs ==
+  done
+  L2 ret length=96
+```
+
+`L2 ret length=96` is the byte length of `abi.encode("World")` (a 32-byte offset word, a 32-byte length word, and one 32-byte padded data word) — confirming `HelloWorldL2.getWord()` returned the expected string.
+
 This call atomically loads the L2 execution entry and drives `HelloWorldL2.getWord()`, verifying the rolling hash that covers the call result `abi.encode("World")`. The L2 side is independent of the L1 side — in a real deployment both happen in coordinated blocks.
 
 ## What just happened?
 
-Four things happened in sequence, spanning both chains (see the [Architecture](/architecture) page for the full call-flow diagram):
+Three things happened in sequence, spanning both chains (see the [Architecture](/architecture) page for the full call-flow diagram):
 
 ### Off-chain pre-computation
 
@@ -232,9 +257,9 @@ The E2E script pre-computed the full execution trace: what calls to make on L2, 
 
 `HelloWorldL1.helloL2World()` called the CrossChainProxy, which forwarded to `EEZ.executeCrossChainCall`. The registry consumed the queued entry, checked the `proxyEntryHash` matched the call hash, verified the rolling hash, applied the state delta, and returned `abi.encode("World")`.
 
-### L2 execution
+## Cleanup
 
-The system address on L2 loaded the L2 entry into `EEZL2` and drove `HelloWorldL2.getWord()`. The L2 contract returned `"World"`, the rolling hash was verified, and the execution completed.
+Stop both Anvil nodes with `Ctrl+C` in their respective terminals. Anvil's state is in-memory only, so there's nothing to reset on disk — to re-run the scenario, start two fresh Anvil instances and repeat from Step 3 (the environment variables from Step 2 stay valid as long as you reuse the same ports).
 
 ## Next steps
 
