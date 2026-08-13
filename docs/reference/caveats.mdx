@@ -4,7 +4,7 @@ sidebar_label: "Caveats"
 description: "EEZ edge cases: queue blocking on revert, transient isolation, proxy opcode differences, block gating, state root staleness, and unaudited status."
 ---
 
-EEZ is a novel synchronous cross-rollup protocol with a number of edge cases that you must understand before building on it. Some of these are fundamental constraints of the execution model; others are deliberate simplifications that will be addressed as the protocol matures. Read this page carefully before deploying any production-facing code.
+EEZ is a synchronous cross-rollup protocol with a number of edge cases that you must understand before building on it. Some of these are fundamental constraints of the execution model; others are deliberate simplifications that will be addressed as the protocol matures. Read this page carefully before deploying any production-facing code.
 
 :::warning
 EEZ is an **early-stage, unaudited implementation**. Interfaces, storage layout, and execution semantics are still in flux. Do not use EEZ contracts with real funds until a full security audit has been completed and the protocol is declared stable.
@@ -20,14 +20,14 @@ Each rollup's execution queue encodes exactly one valid consumption order. When 
 
 This means **you cannot stack multiple candidate entries** and rely on the first one that matches to apply. The queue is not a competing-candidates pool; it is a strict ordered sequence.
 
-**The one exception** is the `IMMEDIATE` prefix — see [Immediate entry skip](/reference/glossary#immediate-entry-skip). `attemptApplyImmediate` wraps each immediate entry in a `try/catch`, so a reverting immediate entry emits `ImmediateEntrySkipped` and the cursor advances. You can use immediate entries with a `StateDelta.currentState` gate to create alternatives — only the entry whose `currentState` matches the live state root will succeed, and the others are skipped cleanly.
+**The one exception** is the `IMMEDIATE` prefix — see [Immediate entry skip](/reference/glossary#immediate-entry-skip). `attemptApplyImmediate` wraps each immediate entry in a `try/catch`, so a reverting immediate entry emits `ImmediateEntrySkipped` and the cursor advances. You can use immediate entries with a [`StateDelta`](/reference/glossary#statedelta)`.currentState` gate to create alternatives — only the entry whose `currentState` matches the live state root will succeed, and the others are skipped cleanly.
 
 For persistent (non-immediate) entries, there is no such tolerance. Build your execution entries carefully and verify them against the exact state root trajectory before posting.
 
 ## Transient-Phase Isolation
 
 :::note
-Cross-rollup interactions inside the meta hook are only supported between rollups verified **together in the same batch**. Interactions with any other rollup must wait for persistent consumption.
+Cross-rollup interactions inside the [meta hook](/reference/glossary#meta-hook) are only supported between rollups verified **together in the same batch**. Interactions with any other rollup must wait for persistent consumption.
 :::
 
 While a `postAndVerifyBatch` is mid-flight (during the immediate-entry drain and the meta-hook window), EEZ routes **all** resolution exclusively from that batch's own transient tables:
