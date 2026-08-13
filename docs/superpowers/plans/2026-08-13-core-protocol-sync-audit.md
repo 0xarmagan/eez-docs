@@ -14,8 +14,8 @@
 - Keep the design-tense / not-live framing (`docs/_unaudited-warning.mdx`, `reference/security.mdx` §0 caveat) — proof system is still dev-grade ECDSA only; do not imply production ZK proving anywhere touched by this plan.
 - Do not touch `docusaurus.config.js` mermaid theming, `custom.css` `.docusaurus-mermaid-container`, or the brand font setup — out of scope, already correct per prior passes.
 - Preserve existing sidebar category structure (`sidebars.js` / `sidebarsContracts.js`) — add new entries, don't reorganize existing ones, unless a task explicitly says to.
-- Run `npm run build` after every task's edits, from `/Users/armagan/eez-docs`, before committing that task. A failed build blocks the commit.
-- Commit per task (small, reviewable diffs) on `main` directly (no PR) — matches this repo's existing history pattern (see `git log`). **Do not push** until the final task explicitly confirms with the user first (Push Permission Boundaries: direct push to `main` needs explicit confirmation).
+- Run `npm run build` after every task's edits, from this worktree's root (`/Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit`), before committing that task. A failed build blocks the commit.
+- All work happens on the isolated branch `docs/core-protocol-sync-audit-2026-08-13`, checked out in the git worktree above — **not** on `main` in the primary `eez-docs` checkout, which currently has unrelated pre-existing uncommitted changes (regenerated motion-loop assets) that must not be touched or mixed into this work. Commit per task (small, reviewable diffs) on this branch. **Do not push and do not merge to `main`** until the final review is clean and the user has explicitly confirmed (Push Permission Boundaries: direct push/merge to `main` needs explicit confirmation) — resolved via `superpowers:finishing-a-development-branch` at the end, not by any individual task.
 - Source repo clone location for this session: `/private/tmp/claude-501/-Users-armagan/29fdf962-4e57-4d4a-8870-3b97dbee1cc3/scratchpad/eez-core-protocol` (already cloned at `60c184b`). Re-`git pull` it at the start of the work if picked up later than today.
 
 ---
@@ -63,7 +63,7 @@
 
 - [ ] **Step 4: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0, no new broken-link warnings referencing these 3 files.
 
 - [ ] **Step 5: Commit.**
@@ -86,7 +86,7 @@ git commit -m "docs: sync L1 registry + rollup-manager pages to eez-core-protoco
 - [ ] **Step 3: Fix mismatches with source citations.**
 - [ ] **Step 4: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0, no new broken-link warnings for `contracts/eezl2.mdx`.
 
 - [ ] **Step 5: Commit.**
@@ -110,7 +110,7 @@ git commit -m "docs: sync EEZL2 contract page to eez-core-protocol main"
 - [ ] **Step 4: Fix mismatches with source citations.**
 - [ ] **Step 5: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0, no new broken-link warnings for these 4 files.
 
 - [ ] **Step 6: Commit.**
@@ -133,7 +133,7 @@ git commit -m "docs: sync bridge/data-types/interface contract pages to eez-core
 - [ ] **Step 3: Fix mismatches with source citations.**
 - [ ] **Step 4: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0, diagram still renders (spot-check via `npx docusaurus serve` + headless Chrome screenshot per prior methodology if any diagram label changed).
 
 - [ ] **Step 5: Commit.**
@@ -157,7 +157,7 @@ git commit -m "docs: sync architecture/execution-model overview pages to eez-cor
 - [ ] **Step 4: Fix mismatches with source citations.**
 - [ ] **Step 5: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0.
 
 - [ ] **Step 6: Commit.**
@@ -180,7 +180,7 @@ git commit -m "docs: rewrite multi-prover concept page against rewritten MULTI_P
 - [ ] **Step 3: Fix any mismatch found.**
 - [ ] **Step 4: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0.
 
 - [ ] **Step 5: Commit** (only if a fix was needed — otherwise note "no change required" and skip the commit).
@@ -205,7 +205,7 @@ git commit -m "docs: confirm cross-chain-proxy page against eez-core-protocol ma
 - [ ] **Step 4: Fix mismatches, cite sources.**
 - [ ] **Step 5: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0, `concepts/rolling-hash.mdx` no longer a stub/gap.
 
 - [ ] **Step 6: Commit.**
@@ -229,7 +229,7 @@ git commit -m "docs: sync execution-entries guide + write rolling-hash concept p
 - [ ] **Step 4: Fix mismatches, cite sources.**
 - [ ] **Step 5: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0.
 
 - [ ] **Step 6: Commit.**
@@ -253,7 +253,7 @@ git commit -m "docs: rewrite lookup-calls guide against rewritten LOOKUP_SPEC"
 - [ ] **Step 3: Fix mismatches on `post-verify-batch.mdx`, cite sources.**
 - [ ] **Step 4: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0, `guides/register-rollup.mdx` no longer a stub/gap.
 
 - [ ] **Step 5: Commit.**
@@ -276,7 +276,7 @@ git commit -m "docs: sync post-verify-batch guide + write register-rollup guide 
 - [ ] **Step 3: Fix mismatches, cite sources.**
 - [ ] **Step 4: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0.
 
 - [ ] **Step 5: Commit.**
@@ -303,7 +303,7 @@ git commit -m "docs: sync flash-loans + bridge-tokens guides to eez-core-protoco
 - [ ] **Step 3: Sweep `reference/glossary.mdx` for terms introduced or renamed by this whole audit pass** (`attemptApplyImmediate`, `ImmediateEntrySkipped`, `StateRootMismatch`, `revertSpan`, any Blob-format terms from Task 12) — add short entries for genuinely new terms used elsewhere on the site; don't pad with terms used only once.
 - [ ] **Step 4: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0.
 
 - [ ] **Step 5: Commit.**
@@ -328,7 +328,7 @@ git commit -m "docs: fix persistent-queue consumption model in caveats, confirm 
 - [ ] **Step 4: Cross-link from wherever it's relevant** (`architecture.mdx` if blobs are part of the top-level flow per the spec's own framing — confirm by re-reading how `BLOB_FORMAT_SPEC.md` positions itself relative to batches/entries before adding the link, don't assume).
 - [ ] **Step 5: Run build.**
 
-Run: `cd /Users/armagan/eez-docs && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && npm run build`
 Expected: exits 0, new page reachable from the sidebar.
 
 - [ ] **Step 6: Commit.**
@@ -340,7 +340,7 @@ git commit -m "docs: add Blob Format concept page from BLOB_FORMAT_SPEC"
 
 ---
 
-### Task 13: Final site-wide sweep + push
+### Task 13: Final site-wide sweep (push/merge handled by finishing-a-development-branch, not this task)
 
 **Files:**
 - Spot-check only (no source changes expected): `docs/tools/visualizator.mdx`, `docs/tools/trace-decoder.mdx`, `docs/introduction.mdx`, `docs/quickstart.mdx`
@@ -349,18 +349,11 @@ git commit -m "docs: add Blob Format concept page from BLOB_FORMAT_SPEC"
 - [ ] **Step 1: Skim the 4 spot-check pages for any cross-link to a page changed in Tasks 1-12 whose anchor/heading may have moved** (e.g. if Task 5 or 8 changed a heading `quickstart.mdx` links to).
 - [ ] **Step 2: Full clean build.**
 
-Run: `cd /Users/armagan/eez-docs && rm -rf build .docusaurus && npm run build`
+Run: `cd /Users/armagan/eez-docs/.worktrees/docs-core-protocol-sync-audit && rm -rf build .docusaurus && npm run build`
 Expected: exits 0, zero broken-link warnings anywhere on the site (not just the touched files).
 
 - [ ] **Step 3: Serve locally and screenshot the new Blob Format page + the fixed caveats page via headless Chrome, per the established verification method, to confirm they render correctly (not just build cleanly).**
 
 Run: `npx docusaurus serve --port 3300 &` then `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless --disable-gpu --screenshot=/tmp/blob-format-check.png --window-size=1200,1600 http://localhost:3300/concepts/blob-format`
 
-- [ ] **Step 4: Report a full summary of every fix made (task-by-task, one line each) to the user and confirm explicitly before pushing** — direct push to `eez-docs`'s `main` requires explicit user confirmation per standing policy; do not push on an implicit "looks good."
-- [ ] **Step 5: Push once confirmed.**
-
-```bash
-git push origin main
-```
-
-- [ ] **Step 6: Confirm the live site** (`https://eez-docs.vercel.app`) picked up the deploy — Vercel auto-deploys on push to `main` for this project; wait for the deploy to complete, then spot-check `/concepts/blob-format` and `/reference/caveats` live.
+- [ ] **Step 4: Commit any Task 13 fixes on the branch, then stop.** Do not push, merge, or touch `main` — that decision belongs to `superpowers:finishing-a-development-branch`, run by the controller session after the final whole-branch review, not to this task.
