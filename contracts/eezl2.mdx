@@ -49,7 +49,18 @@ constructor(uint256 _rollupId, address _systemAddress)
 
 ---
 
-## `loadExecutionTable`
+## Functions
+
+<details>
+<summary>loadExecutionTable — Replace the execution table for the current block</summary>
+
+Replaces the entire execution table with a fresh set of entries and lookup calls. After the call, `executionIndex` is reset to `0` and `lastLoadBlock` is set to the current block number. Any entries remaining from a previous load are discarded without error.
+
+You call this function when the node has pre-computed execution entries for the current block and wants to make them available for consumption. The entries must be consumed in the same block — after the block advances, `lastLoadBlock != block.number` and all consumption attempts revert with `ExecutionNotInCurrentBlock`.
+
+**Who can call it:** Only `SYSTEM_ADDRESS`.
+
+**Emits:** `ExecutionTableLoaded(entries)`
 
 ```solidity
 function loadExecutionTable(
@@ -58,10 +69,6 @@ function loadExecutionTable(
 ) external onlySystemAddress
 ```
 
-Replaces the entire execution table with a fresh set of entries and lookup calls. Only `SYSTEM_ADDRESS` may call this function. After the call, `executionIndex` is reset to `0` and `lastLoadBlock` is set to the current block number. Any entries remaining from a previous load are discarded without error.
-
-You call this function when the node has pre-computed execution entries for the current block and wants to make them available for consumption. The entries must be consumed in the same block — after the block advances, `lastLoadBlock != block.number` and all consumption attempts revert with `ExecutionNotInCurrentBlock`.
-
 #### Parameters
 
 | Name | Type | Description |
@@ -69,13 +76,24 @@ You call this function when the node has pre-computed execution entries for the 
 | `entries` | `ExecutionEntry[]` | The full list of pre-computed execution entries to load. Each entry carries its own flat call array (`incomingCalls`), reentrant call table (`expectedOutgoingCalls`), nested lookup table (`expectedLookups`), rolling hash, and pre-computed return data. Entries are consumed in order via `executeCrossChainCall`. See the [Data Types](/contracts/data-types) reference for the full `ExecutionEntry` structure. |
 | `_lookupCalls` | `LookupCall[]` | Top-level lookup calls available for resolution via `staticCallLookup` or the reverted-lookup fallback. These are separate from the entry-scoped `expectedLookups` inside each `ExecutionEntry`. Pass an empty array when no top-level lookups are needed. |
 
-**Emits**: `ExecutionTableLoaded(entries)`
+#### Errors
 
-**Reverts**: `Unauthorized` — caller is not `SYSTEM_ADDRESS`.
+| Error | Condition |
+| --- | --- |
+| `Unauthorized` | Caller is not `SYSTEM_ADDRESS`. |
 
----
+</details>
 
-## `executeIncomingCrossChainCall`
+<details>
+<summary>executeIncomingCrossChainCall — Load a table and drive the first entry inline</summary>
+
+Atomically loads a new execution table and drives the first entry through the flat call processor. This is the system-initiated delivery path for inbound cross-chain calls arriving from another rollup (including L1).
+
+The function enforces strict equality between `msg.value` and the declared `value` parameter — the node mints exactly the right amount of ETH on L2 to forward to the destination. The first entry in `entries` must have a `proxyEntryHash` that matches `computeCrossChainCallHash(ROLLUP_ID, destination, value, data, sourceAddress, sourceRollup)`, or the call reverts with `EntryHashMismatch`. After `entries[0]` is fully executed, `executionIndex` is advanced to `1` so that subsequent `executeCrossChainCall` invocations in the same transaction can consume `entries[1]`, `entries[2]`, and so on without re-consuming `entries[0]`.
+
+**Who can call it:** Only `SYSTEM_ADDRESS`.
+
+**Emits:** `ExecutionTableLoaded(entries)`, `IncomingCrossChainCallExecuted(crossChainCallHash, destination, value, data, sourceAddress, sourceRollup)`, `EntryExecuted(0, rollingHash, callsProcessed, outgoingCallsConsumed)`, `CallResult(0, callNumber, success, returnData)` (per call), `OutgoingCallConsumed(0, nestedNumber, crossChainCallHash, callCount)` (per reentrant call, reachable via reentrancy), `RevertSpanExecuted(0, startCallNumber, span)` (per revert span)
 
 ```solidity
 function executeIncomingCrossChainCall(
@@ -88,10 +106,6 @@ function executeIncomingCrossChainCall(
     LookupCall[] calldata _lookupCalls
 ) external payable onlySystemAddress returns (bytes memory result)
 ```
-
-Atomically loads a new execution table and drives the first entry through the flat call processor. This is the system-initiated delivery path for inbound cross-chain calls arriving from another rollup (including L1). Only `SYSTEM_ADDRESS` may call this function.
-
-The function enforces strict equality between `msg.value` and the declared `value` parameter — the node mints exactly the right amount of ETH on L2 to forward to the destination. The first entry in `entries` must have a `proxyEntryHash` that matches `computeCrossChainCallHash(ROLLUP_ID, destination, value, data, sourceAddress, sourceRollup)`, or the call reverts with `EntryHashMismatch`. After `entries[0]` is fully executed, `executionIndex` is advanced to `1` so that subsequent `executeCrossChainCall` invocations in the same transaction can consume `entries[1]`, `entries[2]`, and so on without re-consuming `entries[0]`.
 
 #### Parameters
 
@@ -111,22 +125,33 @@ The function enforces strict equality between `msg.value` and the declared `valu
 | --- | --- | --- |
 | `result` | `bytes` | The pre-computed return data from `entries[0]`, as declared in `entry.returnData`. This is the value the source chain's prover committed to as the return value for the inbound call. |
 
-**Emits**: `ExecutionTableLoaded(entries)`, `IncomingCrossChainCallExecuted(crossChainCallHash, destination, value, data, sourceAddress, sourceRollup)`, `EntryExecuted(0, rollingHash, callsProcessed, outgoingCallsConsumed)`, `CallResult(0, callNumber, success, returnData)` (per call), `OutgoingCallConsumed(0, nestedNumber, crossChainCallHash, callCount)` (per reentrant call, reachable via reentrancy), `RevertSpanExecuted(0, startCallNumber, span)` (per revert span)
+#### Errors
 
-**Reverts**:
+| Error | Condition |
+| --- | --- |
+| `Unauthorized` | Caller is not `SYSTEM_ADDRESS`. |
+| `EmptyEntries` | `entries.length == 0`. |
+| `ValueMismatch` | `msg.value != value`. |
+| `EntryHashMismatch` | `entries[0].proxyEntryHash` does not match the computed call hash. |
+| `StaticCallWithValue` | A call marked `isStatic` in `entries[0]`'s call table was loaded with a non-zero `value`. |
+| `RollingHashMismatch` | The rolling hash computed during execution does not match `entries[0].rollingHash`. |
+| `UnconsumedIncomingCalls` | Not all calls in `entries[0].incomingCalls` were consumed. |
+| `UnconsumedOutgoingCalls` | Not all reentrant entries in `entries[0].expectedOutgoingCalls` were consumed. |
 
-- `Unauthorized` — caller is not `SYSTEM_ADDRESS`.
-- `EmptyEntries` — `entries.length == 0`.
-- `ValueMismatch` — `msg.value != value`.
-- `EntryHashMismatch` — `entries[0].proxyEntryHash` does not match the computed call hash.
-- `StaticCallWithValue` — a call marked `isStatic` in `entries[0]`'s call table was loaded with a non-zero `value`.
-- `RollingHashMismatch` — the rolling hash computed during execution does not match `entries[0].rollingHash`.
-- `UnconsumedIncomingCalls` — not all calls in `entries[0].incomingCalls` were consumed.
-- `UnconsumedOutgoingCalls` — not all reentrant entries in `entries[0].expectedOutgoingCalls` were consumed.
+</details>
 
----
+<details>
+<summary>executeCrossChainCall — Execute a queued cross-chain call via proxy</summary>
 
-## `executeCrossChainCall`
+Consumes the next execution entry and drives its flat call array through the processor.
+
+When called outside an active execution (`_insideExecution() == false`), the function advances `executionIndex`, sets up fresh transient state, and drives the full entry. When called during an active execution — meaning a destination contract called back into the manager via a proxy — the function routes to `_consumeNestedAction` instead, consuming the next `ExpectedOutgoingCrossChainCall` from the active execution host's reentrant table (the entry, or — when resolving inside a reverted lookup — that lookup's own `expectedOutgoingCalls`) without advancing `executionIndex`.
+
+Any ETH attached to the call (`msg.value > 0`) is immediately forwarded to `SYSTEM_ADDRESS`. This is the L2 ETH burn: the protocol does not retain ETH on the L2 manager contract.
+
+**Who can call it:** Registered proxy contracts only — the caller's address is looked up in the `authorizedProxies` registry; an unregistered address reverts with `UnauthorizedProxy`.
+
+**Emits:** `CrossChainCallExecuted(crossChainCallHash, msg.sender, sourceAddress, callData, msg.value)`, `ExecutionConsumed(crossChainCallHash, executionIndex)`, `EntryExecuted(entryIndex, rollingHash, callsProcessed, outgoingCallsConsumed)`, `CallResult(entryIndex, callNumber, success, returnData)` (per call), `OutgoingCallConsumed(entryIndex, nestedNumber, crossChainCallHash, callCount)` (per reentrant call), `RevertSpanExecuted(entryIndex, startCallNumber, span)` (per revert span)
 
 ```solidity
 function executeCrossChainCall(
@@ -134,12 +159,6 @@ function executeCrossChainCall(
     bytes calldata callData
 ) external payable returns (bytes memory result)
 ```
-
-Consumes the next execution entry and drives its flat call array through the processor. Only registered proxy contracts may call this function — the caller's address is looked up in the `authorizedProxies` registry; an unregistered address reverts with `UnauthorizedProxy`.
-
-When called outside an active execution (`_insideExecution() == false`), the function advances `executionIndex`, sets up fresh transient state, and drives the full entry. When called during an active execution — meaning a destination contract called back into the manager via a proxy — the function routes to `_consumeNestedAction` instead, consuming the next `ExpectedOutgoingCrossChainCall` from the active execution host's reentrant table (the entry, or — when resolving inside a reverted lookup — that lookup's own `expectedOutgoingCalls`) without advancing `executionIndex`.
-
-Any ETH attached to the call (`msg.value > 0`) is immediately forwarded to `SYSTEM_ADDRESS`. This is the L2 ETH burn: the protocol does not retain ETH on the L2 manager contract.
 
 #### Parameters
 
@@ -154,22 +173,31 @@ Any ETH attached to the call (`msg.value > 0`) is immediately forwarded to `SYST
 | --- | --- | --- |
 | `result` | `bytes` | The pre-computed return data from the matched execution entry (`entry.returnData`), as committed to by the prover. |
 
-**Emits**: `CrossChainCallExecuted(crossChainCallHash, msg.sender, sourceAddress, callData, msg.value)`, `ExecutionConsumed(crossChainCallHash, executionIndex)`, `EntryExecuted(entryIndex, rollingHash, callsProcessed, outgoingCallsConsumed)`, `CallResult(entryIndex, callNumber, success, returnData)` (per call), `OutgoingCallConsumed(entryIndex, nestedNumber, crossChainCallHash, callCount)` (per reentrant call), `RevertSpanExecuted(entryIndex, startCallNumber, span)` (per revert span)
+#### Errors
 
-**Reverts**:
+| Error | Condition |
+| --- | --- |
+| `UnauthorizedProxy` | Caller is not a registered proxy. |
+| `ExecutionNotInCurrentBlock` | `lastLoadBlock != block.number`. |
+| `EtherTransferFailed` | The ETH forwarding to `SYSTEM_ADDRESS` failed. |
+| `ExecutionNotFound` | No matching entry or lookup call found. |
+| `StaticCallWithValue` | A call marked `isStatic` in the entry's call table was loaded with a non-zero `value`. |
+| `RollingHashMismatch` | Post-execution hash check failed. |
+| `UnconsumedIncomingCalls` | Not all calls were consumed. |
+| `UnconsumedOutgoingCalls` | Not all reentrant calls were consumed. |
 
-- `UnauthorizedProxy` — caller is not a registered proxy.
-- `ExecutionNotInCurrentBlock` — `lastLoadBlock != block.number`.
-- `EtherTransferFailed` — the ETH forwarding to `SYSTEM_ADDRESS` failed.
-- `ExecutionNotFound` — no matching entry or lookup call found.
-- `StaticCallWithValue` — a call marked `isStatic` in the entry's call table was loaded with a non-zero `value`.
-- `RollingHashMismatch` — post-execution hash check failed.
-- `UnconsumedIncomingCalls` — not all calls were consumed.
-- `UnconsumedOutgoingCalls` — not all reentrant calls were consumed.
+</details>
 
----
+<details>
+<summary>staticCallLookup — Resolve a static cross-chain read</summary>
 
-## `staticCallLookup`
+Resolves a pre-computed lookup result for a read-only (STATICCALL) cross-chain call. The proxy's fallback automatically routes to `staticCallLookup` instead of `executeCrossChainCall` when it detects it is operating inside a STATICCALL frame (via its `staticCheck` self-call mechanism).
+
+Inside an active execution, the function scans the active execution host's `expectedLookups` array (the entry's, or — when resolving inside a reverted lookup — that lookup's own table) for a match on the four-tuple `(crossChainCallHash, callNumber, lastOutgoingCallConsumed, executingLookupIndex)`. Outside an active execution, it scans the persistent `lookupCalls` pool, matching by `crossChainCallHash` alone (L2 has no state roots to pin against).
+
+In both cases, if the matched lookup has `failed == true`, the function reverts with the stored `returnData`, allowing the caller's `try/catch` to observe the pre-computed revert. If `failed == false`, it returns `returnData` as a successful result. Any sub-calls declared in the lookup's `incomingCalls` are always executed as STATICCALLs and their rolling hash is verified against the lookup's `rollingHash` before returning.
+
+**Who can call it:** Registered proxy contracts only.
 
 ```solidity
 function staticCallLookup(
@@ -177,12 +205,6 @@ function staticCallLookup(
     bytes calldata callData
 ) external view returns (bytes memory)
 ```
-
-Resolves a pre-computed lookup result for a read-only (STATICCALL) cross-chain call. Only registered proxy contracts may call this function. The proxy's fallback automatically routes to `staticCallLookup` instead of `executeCrossChainCall` when it detects it is operating inside a STATICCALL frame (via its `staticCheck` self-call mechanism).
-
-Inside an active execution, the function scans the active execution host's `expectedLookups` array (the entry's, or — when resolving inside a reverted lookup — that lookup's own table) for a match on the four-tuple `(crossChainCallHash, callNumber, lastOutgoingCallConsumed, executingLookupIndex)`. Outside an active execution, it scans the persistent `lookupCalls` pool, matching by `crossChainCallHash` alone (L2 has no state roots to pin against).
-
-In both cases, if the matched lookup has `failed == true`, the function reverts with the stored `returnData`, allowing the caller's `try/catch` to observe the pre-computed revert. If `failed == false`, it returns `returnData` as a successful result. Any sub-calls declared in the lookup's `incomingCalls` are always executed as STATICCALLs and their rolling hash is verified against the lookup's `rollingHash` before returning.
 
 #### Parameters
 
@@ -197,16 +219,25 @@ In both cases, if the matched lookup has `failed == true`, the function reverts 
 | --- | --- | --- |
 | (return) | `bytes` | The pre-computed return data for the matched lookup. If the lookup is marked `failed`, this function reverts with that data instead of returning it. |
 
-**Reverts**:
+#### Errors
 
-- `UnauthorizedProxy` — caller is not a registered proxy.
-- `ExecutionNotFound` — no matching lookup entry found.
-- `LookupCallProxyNotDeployed` — a sub-call in the matched lookup's `incomingCalls` targets a source proxy address with no deployed code.
-- `RollingHashMismatch` — the sub-call rolling hash does not match the lookup's stored `rollingHash`.
+| Error | Condition |
+| --- | --- |
+| `UnauthorizedProxy` | Caller is not a registered proxy. |
+| `ExecutionNotFound` | No matching lookup entry found. |
+| `LookupCallProxyNotDeployed` | A sub-call in the matched lookup's `incomingCalls` targets a source proxy address with no deployed code. |
+| `RollingHashMismatch` | The sub-call rolling hash does not match the lookup's stored `rollingHash`. |
 
----
+</details>
 
-## `createCrossChainProxy`
+<details>
+<summary>createCrossChainProxy — Deploy a cross-chain proxy for a remote address</summary>
+
+Deploys a deterministic `CrossChainProxy` contract for the given `(originalAddress, originalRollupId)` pair using CREATE2, then registers it in the `authorizedProxies` mapping. See [Cross-Chain Proxy](/concepts/cross-chain-proxy) for the full CREATE2 address formula. Calling this function twice for the same pair reverts at the EVM level because CREATE2 cannot deploy to an already-occupied address.
+
+**Who can call it:** Anyone.
+
+**Emits:** `CrossChainProxyCreated(proxy, originalAddress, originalRollupId)`
 
 ```solidity
 function createCrossChainProxy(
@@ -214,8 +245,6 @@ function createCrossChainProxy(
     uint256 originalRollupId
 ) external returns (address proxy)
 ```
-
-Deploys a deterministic `CrossChainProxy` contract for the given `(originalAddress, originalRollupId)` pair using CREATE2, then registers it in the `authorizedProxies` mapping. Any caller may invoke this function. See [Cross-Chain Proxy](/concepts/cross-chain-proxy) for the full CREATE2 address formula. Calling this function twice for the same pair reverts at the EVM level because CREATE2 cannot deploy to an already-occupied address.
 
 #### Parameters
 
@@ -230,15 +259,20 @@ Deploys a deterministic `CrossChainProxy` contract for the given `(originalAddre
 | --- | --- | --- |
 | `proxy` | `address` | The address of the newly deployed `CrossChainProxy` contract. |
 
-**Emits**: `CrossChainProxyCreated(proxy, originalAddress, originalRollupId)`
+#### Errors
 
-**Reverts**:
+| Error | Condition |
+| --- | --- |
+| `SameNetworkProxy` | `originalRollupId == ROLLUP_ID` (a proxy cannot represent an address on this L2's own network). |
 
-- `SameNetworkProxy` — `originalRollupId == ROLLUP_ID` (a proxy cannot represent an address on this L2's own network).
+</details>
 
----
+<details>
+<summary>computeCrossChainProxyAddress — Predict proxy address before deployment</summary>
 
-## `computeCrossChainProxyAddress`
+Computes the deterministic CREATE2 address for a `CrossChainProxy` without deploying it — see [Cross-Chain Proxy](/concepts/cross-chain-proxy) for the exact formula. You can use this to predict a proxy address before it exists and pass it to contracts that need to whitelist it. Because the manager address is part of the bytecode hash via constructor args, each manager's proxy addresses are unique to that manager.
+
+**Who can call it:** Anyone.
 
 ```solidity
 function computeCrossChainProxyAddress(
@@ -246,8 +280,6 @@ function computeCrossChainProxyAddress(
     uint256 originalRollupId
 ) public view returns (address)
 ```
-
-Computes the deterministic CREATE2 address for a `CrossChainProxy` without deploying it — see [Cross-Chain Proxy](/concepts/cross-chain-proxy) for the exact formula. You can use this to predict a proxy address before it exists and pass it to contracts that need to whitelist it. Because the manager address is part of the bytecode hash via constructor args, each manager's proxy addresses are unique to that manager.
 
 #### Parameters
 
@@ -262,21 +294,9 @@ Computes the deterministic CREATE2 address for a `CrossChainProxy` without deplo
 | --- | --- | --- |
 | (return) | `address` | The predicted address of the `CrossChainProxy` for this pair. This matches the address returned by `createCrossChainProxy` when called with the same arguments. |
 
+</details>
+
 ---
-
-## Errors
-
-| Error | Description |
-| --- | --- |
-| `Unauthorized()` | Caller is not `SYSTEM_ADDRESS`. |
-| `InvalidRollupId()` | Constructor was passed `_rollupId == 0`. |
-| `ExecutionNotInCurrentBlock()` | `lastLoadBlock != block.number` at consumption time. |
-| `EtherTransferFailed()` | Forwarding `msg.value` to `SYSTEM_ADDRESS` failed. |
-| `EmptyEntries()` | `executeIncomingCrossChainCall` was called with no entries. |
-| `ValueMismatch()` | `msg.value` does not equal the declared `value` parameter. |
-| `EntryHashMismatch()` | `entries[0].proxyEntryHash` does not match the computed call hash. |
-| `UnconsumedIncomingCalls()` | Entry completed but `_currentIncomingCall != entry.incomingCalls.length`. |
-| `UnconsumedOutgoingCalls()` | Entry completed but `_lastOutgoingCallConsumed != entry.expectedOutgoingCalls.length`. |
 
 ## Events
 
