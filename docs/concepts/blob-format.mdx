@@ -8,7 +8,7 @@ import UnauditedWarning from '../_unaudited-warning.mdx'
 
 <UnauditedWarning />
 
-EEZ publishes chain activity — native transactions, cross-chain calls, their results, forced reverts, and transaction boundaries — as a single binary stream of messages, with no header. Every one of those event kinds differs from every other only by its **message type**; there is exactly one exception, a single reserved byte at the very start of the stream. This is the wire format a batch's EIP-4844 blobs (and trailing calldata) actually contain, once you unpack the blobs' field elements (see below). What actually gets bound into the [public inputs hash](/concepts/multi-prover#the-public-inputs-hash) is the blobs' own EIP-4844 versioned hashes (`blobhash()`, over the packed field elements, not the decoded stream) plus a `keccak256` of the raw calldata tail — the proof system itself is responsible for showing that this packed commitment decodes to the claimed logical message stream.
+EEZ publishes chain activity — native transactions, cross-chain calls, their results, forced reverts, and transaction boundaries — as a single binary stream of messages, with no header. Every one of those event kinds differs from every other only by its **message type**; there is exactly one exception, a single reserved byte at the very start of the stream. This is the wire format a batch's EIP-4844 blobs (and trailing calldata) actually contain, once you unpack the blobs' field elements (see [Physical Packing](#physical-packing)). What actually gets bound into the [public inputs hash](/concepts/multi-prover#the-public-inputs-hash) is the blobs' own EIP-4844 versioned hashes (`blobhash()`, over the packed field elements, not the decoded stream) plus a `keccak256` of the raw calldata tail. The proof system itself is responsible for showing that this packed commitment decodes to the claimed logical message stream.
 
 ## Framing: One Reserved Byte, Then a Stream of Messages
 
@@ -48,7 +48,7 @@ A handful of encoding rules apply uniformly across every message type's fields:
 
 - **Blob layout**: the logical byte stream is the batch's EIP-4844 blobs, in order, concatenated — with the batch's `callData` appended after the last blob, as one continuous stream. A message may span a blob boundary; the next blob simply continues the stream where the last one left off.
 
-<details>
+<details id="physical-packing">
 <summary>For builders: physical packing into a blob's field elements</summary>
 
 An EIP-4844 blob is 4096 field elements of 32 bytes each, and every element must be a valid BLS12-381 scalar (below the field modulus). Each field element carries 31 bytes of stream data; its 32nd byte is unused and must be zero, which keeps every element well under the modulus regardless of its data bytes. Elements are read least-significant-byte first, so the unused zero byte is the most significant one read last — under this version's 31-byte-per-element packing, a blob's useful capacity is `4096 × 31 = 126,976` bytes. A denser packing (254 bits per element) is planned for a future format version, so this figure is specific to version `00`, not a permanent property of the format. The trailing `callData` has no such constraint; it's raw bytes appended to the decoded stream as-is.
@@ -56,8 +56,6 @@ An EIP-4844 blob is 4096 field elements of 32 bytes each, and every element must
 </details>
 
 ## The Ten Message Types
-
-Everything is a message: chain-local operations, cross-chain calls, their results, forced reverts, and transaction boundaries are all just different `message_type` values on the same wire format.
 
 | type | name | shape | fields (in wire order) |
 | --- | --- | --- | --- |
