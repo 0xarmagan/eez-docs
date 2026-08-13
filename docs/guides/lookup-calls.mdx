@@ -11,7 +11,14 @@ import DiagramMotion from '@site/src/components/DiagramMotion';
 
 A lookup call is a mechanism for crossing a rollup boundary to perform a **read-only query**. Instead of executing a state-changing cross-chain call, a lookup provides pre-recorded return data for a `STATICCALL` that would otherwise require reaching across chains. The prover computes the correct return value off-chain, records it in the execution entry or the lookup pool, and the on-chain machinery verifies it and hands it back to the caller.
 
-Lookups also cover a second pattern: **reverting cross-chain calls**. When an L1 contract calls an L2 contract inside a `try/catch` and expects that call to revert, a lookup records the revert data and the sub-execution that produced it. Both static reads and reverting calls are resolved through the same lookup infrastructure.
+Lookups also cover a second pattern: **reverting cross-chain calls**. When an L1 contract calls an L2 contract inside a `try/catch` and expects that call to revert, a lookup records the revert data and the sub-execution that produced it.
+
+Static reads and reverting calls share the same two structs (`ExpectedLookup` / `LookupCall`) and the same `failed` flag, but they are **not** resolved by the same on-chain function. Which function resolves a lookup is decided by the EVM opcode the caller actually issues, not by the `failed` flag:
+
+- A `STATICCALL` from the caller always routes to `staticCallLookup` — an untagged, read-only resolution path that can never mutate state.
+- A regular `CALL` — including the `try/catch`-wrapped call above, which Solidity compiles to a normal `CALL`, not a `staticcall` — routes to `executeCrossChainCall` instead, and can only resolve a lookup through that function's *miss-path fallback* into a dedicated set of "reverted lookup" functions, which run a different (tagged) hash schema with real, potentially state-mutating sub-calls.
+
+A `failed == false` (static-read) entry is only ever reachable via the `STATICCALL` route — a successful state-changing reentrant call is expressed as an `ExpectedL1ToL2Call`, not a lookup, so the `CALL` route never even looks for one. A `failed == true` (reverting) entry can be reached via *either* route, depending on which opcode the caller uses to observe it. See [Resolution Mechanics](#resolution-mechanics) for the full dispatch logic.
 
 EEZ has two distinct lookup structs that live in two different places, each serving a different context.
 
@@ -20,7 +27,7 @@ EEZ has two distinct lookup structs that live in two different places, each serv
 | Struct | Lives in | Serves | Match key |
 | --- | --- | --- | --- |
 | `ExpectedLookup` | `ExecutionEntry.expectedLookups[]` (nested) | Reentrant static reads and try/catch'd reverting calls fired _inside_ an execution | `(crossChainCallHash, l2ToL1CallNumber, lastL1ToL2CallConsumed, executingLookupIndex)` |
-| `LookupCall` | Storage pool: `_transientLookupCalls` / per-rollup `lookupQueue` (L1) or `lookupCalls` (L2) | Top-level static reads and top-level reverting calls, consumable only _outside_ an active execution | `crossChainCallHash` \+ all `expectedStateRoots` pins live (L1 only) |
+| `LookupCall` | Storage pool: `_transientLookupCalls` / per-rollup `lookupQueue` (L1) or `lookupCalls` (L2) | Top-level static reads and top-level reverting calls, consumable only _outside_ an active execution | `crossChainCallHash` \+ `destinationRollupId` (L1 only) \+ all `expectedStateRoots` pins live (L1 only) |
 
 This split is what makes lookups **entry-scoped by construction**. A nested `ExpectedLookup` can only be resolved from the specific execution entry (or top-level lookup sub-execution) that owns it — there is no shared queue to pollute, no cross-entry collision, and no cross-rollup routing concern.
 
@@ -53,11 +60,16 @@ struct ExpectedLookup {
 }
 ```
 
-### Two Modes
+### Two Modes, Two Possible Dispatch Routes
 
-**Static mode (`failed == false`)**: The `CrossChainProxy` auto-detects `STATICCALL` context. When a contract calls a proxy using `STATICCALL`, EEZ routes to `staticCallLookup`. Inside an execution (`_insideExecution() == true`), `staticCallLookup` scans the active host's `expectedLookups[]` for the 4-tuple key `(crossChainCallHash, l2ToL1CallNumber, lastL1ToL2CallConsumed, executingLookupIndex)`. On match, it runs any sub-calls in `STATICCALL` context, verifies the untagged rolling hash, and returns `returnData`.
+**Static mode (`failed == false`)**: Only reachable when the caller issues an actual `STATICCALL` against the proxy. `CrossChainProxy._fallback()` detects this and routes to `staticCallLookup` (see [How CrossChainProxy Routes to staticCallLookup](#how-crosschainproxy-routes-to-staticcalllookup)). Inside an execution (`_insideExecution() == true`), `staticCallLookup` scans the active host's `expectedLookups[]` for the 4-tuple key `(crossChainCallHash, l2ToL1CallNumber, lastL1ToL2CallConsumed, executingLookupIndex)`. On match, it runs any sub-calls via `_processNStaticCalls` — a real `STATICCALL` loop that cannot mutate state — verifies the untagged rolling hash, and returns `returnData`.
 
-**Failed mode (`failed == true`)**: A reverting nested lookup is matched during execution and runs as a mini sub-execution, then reverts with `returnData`. The calling contract's `try/catch` observes the revert. This mode allows pre-computing the effect of a cross-chain call that you know will revert — for example, checking whether a remote operation is feasible without committing to it.
+**Failed mode (`failed == true`)**: Reachable via *either* opcode the caller uses, resolved by a different function depending on which:
+
+- If the caller issues a `STATICCALL`, it still routes to `staticCallLookup` above, which reverts with `returnData` instead of returning it — same untagged, non-mutating sub-call loop.
+- If the caller issues a regular `CALL` — the `try/catch` pattern from the page introduction — it routes to `executeCrossChainCall`, which (inside an execution) calls `_consumeNestedAction`. That function first tries to match an `ExpectedL1ToL2Call` (a normal reentrant call); only on a miss does it fall back to scanning `expectedLookups[]` for a `failed == true` match on the same 4-tuple key, resolving it through `_executeRevertedNestedLookup`. This runs the sub-execution for real: sub-calls execute via `_processNCalls` (genuine `CALL`/`STATICCALL` per sub-call, so it **can mutate state**) under the **tagged** hash schema, then reverts with `returnData`.
+
+Both routes end in a revert that the calling contract's `try`/`catch` (or reverting `STATICCALL`) observes — pre-computing the effect of a cross-chain call you know will revert, e.g. to check feasibility without committing to it. Only the second, regular-`CALL` route involves genuine sub-calls capable of mutating state.
 
 ### The `callCount` Partition
 
@@ -82,7 +94,7 @@ Static lookups run their `l2ToL1Calls[]` *flatly* via `_processNStaticCalls` —
 
 The same `callCount == 0` also applies to a **plain failed lookup** with no sub-calls (`l2ToL1Calls.length == 0`) — it still runs through the reverted-lookup path, but with nothing to partition it degenerates into a no-op sub-execution that immediately reverts with `returnData`.
 
-The mode split is by **context**, not by `callCount`: a `failed` lookup matched during execution always runs through the reverted-lookup path; `staticCallLookup` always resolves statically. Within the reverted path, `callCount` is what distinguishes a plain cached revert (`0`) from a real sub-execution (`>= 1`).
+The split between the untagged static-resolution loop and the tagged reverted-lookup mini-execution is decided by **which opcode reached the match** (see [Two Modes, Two Possible Dispatch Routes](#two-modes-two-possible-dispatch-routes)), not by `callCount` and not solely by `failed` — a `failed == true` entry can be resolved by either route. Within the regular-`CALL` / reverted-lookup route specifically, `callCount` is what further distinguishes a plain cached revert (`0`) from a real sub-execution (`>= 1`).
 
 > **Pitfall:** `callCount == 0` with a non-empty `expectedL1ToL2Calls` is malformed — a nested reentrant frame can only be entered from a top-level call, so a real sub-execution always has `callCount >= 1`. Conversely, a `failed == false` lookup is never matched by the execution-context revert fallbacks (they require `failed == true`).
 
@@ -132,7 +144,7 @@ struct ExpectedStateRootPerRollup {
 
 struct LookupCall {
     bytes32 crossChainCallHash;
-    uint256 destinationRollupId;             // routes to lookupQueue[rollupId] on L1
+    uint256 destinationRollupId;             // routes to lookupQueue[rollupId] on L1, checked on every match
     bytes   returnData;
     bool    failed;
     L2ToL1Call[]         l2ToL1Calls;
@@ -144,9 +156,9 @@ struct LookupCall {
 }
 ```
 
-Top-level lookups are published to the storage pool by `postAndVerifyBatch` (via `l1ToL2lookupCalls`) and are consumed when a `STATICCALL` crosses a chain boundary outside any execution. The match requires `crossChainCallHash` to match AND all `expectedStateRoots` pins to match the live `rollups[rollupId].stateRoot` for each pinned rollup.
+Top-level lookups are published to the storage pool by `postAndVerifyBatch` (via `l1ToL2lookupCalls`) and are consumed when a `STATICCALL` crosses a chain boundary outside any execution — or, for a `failed == true` entry, when a regular `CALL`'s miss-path fallback finds it (see [Resolution Mechanics](#resolution-mechanics)). The on-chain match always checks three terms together, **identically in both phases**: `crossChainCallHash` matches, `destinationRollupId` equals the calling proxy's own rollup, and every `expectedStateRoots` pin equals the live `rollups[rollupId].stateRoot`.
 
-While a batch is mid-flight, top-level lookups are consumed from a single global transient pool (`_transientLookupCalls`) that is **not** routed per-rollup. In that phase the on-chain match adds a third term — `destinationRollupId` must equal the calling proxy's rollup — so a prover cannot resolve a lookup meant for a different rollup. Once the batch is persisted, lookups live in the per-rollup `lookupQueue[destinationRollupId]`, where queue routing already enforces the same guarantee.
+While a batch is mid-flight, top-level lookups are consumed from a single global transient pool (`_transientLookupCalls`) that is **not** routed per-rollup — here the `destinationRollupId` check is the only thing preventing a prover from resolving a lookup meant for a different rollup, since the pool holds every rollup's entries together. Once the batch is persisted, lookups live in the per-rollup `lookupQueue[destinationRollupId]`; the same `destinationRollupId == destRid` check is still literally evaluated on every match attempt there too — it's just redundant, because queue routing already guarantees it. `_activeLookupCalls` is the single place that picks which table is in scope for either phase, and both `staticCallLookup` and `_tryRevertedTopLevelLookup` run the identical three-term match against whichever table it returns.
 
 On L2, the `LookupCall` struct drops `destinationRollupId` and `expectedStateRoots` entirely (single rollup, match is by `crossChainCallHash` alone). The pool is `lookupCalls`.
 
@@ -168,7 +180,7 @@ LookupCall memory lookup = LookupCall({
 });
 ```
 
-When `staticCallLookup` scans the pool outside an execution, it skips any candidate whose `expectedStateRoots` pins do not all equal their respective live state roots. This means you pin the lookup to a specific cross-rollup interleaving — the read is only valid at the exact point in the batch where those rollup states hold.
+When `staticCallLookup` scans the pool outside an execution, it skips any candidate whose `expectedStateRoots` pins do not all equal their respective live state roots (in addition to requiring `crossChainCallHash` and `destinationRollupId` to match). This means you pin the lookup to a specific cross-rollup interleaving — the read is only valid at the exact point in the batch where those rollup states hold.
 
 An empty `expectedStateRoots` array matches unconditionally, which is appropriate for reads that do not depend on any particular rollup state.
 
@@ -181,6 +193,8 @@ The `CrossChainProxy` is the on-chain gateway for all cross-chain calls. It auto
 
 This means any contract that calls a `CrossChainProxy` with `STATICCALL` (or `staticcall` in Solidity) automatically uses the lookup path. You do not need to call a different function or use a different proxy — the same proxy address handles both modes.
 
+**Detection mechanism:** `_fallback()` self-calls `staticCheck()`, which attempts a transient-storage write (`tstore`). That write reverts in a `STATICCALL` context but succeeds in a regular `CALL` context, so the self-call's success/failure alone tells the proxy which opcode it was invoked with — no explicit flag or separate entry point is involved (`src/base/CrossChainProxy.sol`).
+
 ```solidity
 // Regular cross-chain call (state-changing)
 (bool ok, bytes memory ret) = crossChainProxy.call(calldata);
@@ -192,14 +206,18 @@ This means any contract that calls a `CrossChainProxy` with `STATICCALL` (or `st
 
 ### Resolution Mechanics
 
-`staticCallLookup` branches on `_insideExecution()`:
+`CrossChainProxy._fallback()` decides which function even sees the call, by opcode (see above) — that choice, not the `failed` flag, is what determines which resolution path runs.
+
+#### Path 1 — Caller issues `STATICCALL` → `staticCallLookup`
+
+`staticCallLookup` branches only on `_insideExecution()`, never on `failed`:
 
 **Inside an execution** (nested lookup path):
 
 ```text
 scan host's expectedLookups[] for:
   (crossChainCallHash, l2ToL1CallNumber, lastL1ToL2CallConsumed, executingLookupIndex)
-→ run sub-calls via _processNStaticCalls (STATICCALL loop)
+→ run sub-calls via _processNStaticCalls (real STATICCALL loop — cannot mutate state)
 → verify untagged rolling hash == rollingHash
 → return returnData (or revert with it if failed == true)
 ```
@@ -209,39 +227,78 @@ scan host's expectedLookups[] for:
 ```text
 if a transient batch is currently mid-flight (_transientExecutions.length != 0):
   scan _transientLookupCalls only
+    for crossChainCallHash AND destinationRollupId == calling proxy's rollup
+    AND all expectedStateRoots live
   (no match → revert ExecutionNotFound; the persistent queue is never consulted)
 else:
   scan lookupQueue[destinationRollupId] only
-    for crossChainCallHash AND all expectedStateRoots live
+    for crossChainCallHash AND destinationRollupId == calling proxy's rollup
+    AND all expectedStateRoots live
 → run sub-calls via _processNStaticCalls
 → verify untagged rolling hash
 → return returnData (or revert with it if failed == true)
 ```
 
-On L2, `staticCallLookup` scans only the single `lookupCalls` pool by `crossChainCallHash` alone.
+On L2, `staticCallLookup` scans only the single `lookupCalls` pool by `crossChainCallHash` alone (no `destinationRollupId`, no `expectedStateRoots`).
+
+#### Path 2 — Caller issues a regular `CALL` → `executeCrossChainCall`
+
+This is the route a `try/catch`-wrapped call actually takes: Solidity's `try`/`catch` on an external call compiles to a normal `CALL`, not a `staticcall`. `executeCrossChainCall` can only ever resolve a `failed == true` lookup, and only as a **fallback after a miss** on the primary (non-lookup) consumption path — it never matches a `failed == false` static-read entry.
+
+**Inside an execution** — `_consumeNestedAction`:
+
+```text
+1. Try to match ExpectedL1ToL2Call[lastL1ToL2CallConsumed] against crossChainCallHash.
+   → match: advance cursor, run real sub-calls via _processNCalls(nested.callCount),
+     return the cached returnData. (Not a lookup at all.)
+2. Miss → scan the active host's expectedLookups[] for a failed == true entry on the
+   same 4-tuple key used by staticCallLookup.
+   → match: _executeRevertedNestedLookup(i) — always reverts.
+3. No match anywhere → defer the revert (ExecutionNotFound surfaces at the
+   end-of-entry check in _applyAndExecute).
+```
+
+**Outside an execution** — `_consumeAndExecute`:
+
+```text
+1. Try to match the next queued (or transient) ExecutionEntry against crossChainCallHash
+   (+ destinationRollupId during the transient phase).
+2. Miss → _tryRevertedTopLevelLookup(crossChainCallHash, destRid): scan the table in
+   scope (transient or lookupQueue[destRid], via _activeLookupCalls) for a
+   failed == true LookupCall matching crossChainCallHash AND destinationRollupId
+   AND all expectedStateRoots live.
+   → match: _executeRevertedTopLevelLookup(sc, i) — always reverts.
+3. No match → revert ExecutionNotFound. The cursor is not advanced on this miss path.
+```
+
+Both `_executeRevertedNestedLookup` and `_executeRevertedTopLevelLookup` route into the shared `_executeRevertedLookup` tail: fresh sub-execution context, real sub-calls via `_processNCalls` (genuine `CALL`/`STATICCALL` per sub-call's `isStatic` flag — **can mutate state**), the **tagged** hash schema, entry-style end-of-frame checks (`_currentL2ToL1Call == l2ToL1Calls.length`, `_lastL1ToL2CallConsumed == expectedL1ToL2Calls.length`), then a terminal revert with the cached `returnData`.
+
+:::info
+The `failed` flag says whether resolution ends in a **return** or a **revert** — it does not say which *function* resolves the lookup. That's determined entirely by the caller's opcode: a `STATICCALL` always resolves through `staticCallLookup` (Path 1); a regular `CALL` can only resolve a `failed == true` lookup, and only via the miss-path fallback into `_executeRevertedNestedLookup` / `_executeRevertedTopLevelLookup` (Path 2). A `failed == true` entry is reachable by *either* path depending on which opcode the caller happens to use; a `failed == false` entry is reachable only by Path 1.
+:::
 
 ## L1 / L2 Differences at a Glance
 
 | Feature | L1 (EEZ) | L2 (EEZL2) |
 | --- | --- | --- |
 | Top-level pool name | `lookupQueue[rollupId]` \+ `_transientLookupCalls` | `lookupCalls` |
-| Match fields | `crossChainCallHash` \+ `expectedStateRoots` | `crossChainCallHash` only |
-| `destinationRollupId` on `LookupCall` | Present (routes to correct queue) | Absent |
+| Match fields (top-level) | `crossChainCallHash` \+ `destinationRollupId` \+ `expectedStateRoots` (identical in both phases) | `crossChainCallHash` only |
+| `destinationRollupId` on `LookupCall` | Present (routes to correct queue; part of the match test in both phases) | Absent |
 | `expectedStateRoots` | Present (L1-only) | Absent |
 | Struct field names | L1-directional (`l2ToL1Calls`, `expectedL1ToL2Calls`) | Self-relative (`incomingCalls`, `expectedOutgoingCalls`) |
 | Transient pool scan | L1 scans transient XOR persistent (whichever is active), never both | L2 scans only `lookupCalls` |
 
 ## Invariants Summary
 
-When building lookup entries, follow these rules or the batch will revert on-chain:
+Most of these rules are enforced on-chain **only when a lookup is actually consumed** through its resolving function — a mismatch surfaces as `RollingHashMismatch`, `UnconsumedL2ToL1Calls`, or `UnconsumedL1ToL2Calls` at that function's end-of-frame checks. One rule is different, flagged below: it is a pure prover-side convention that no on-chain function reads, so violating it alone never reverts anything.
 
-- `failed == false` requires `callCount == 0`, `expectedL1ToL2Calls.length == 0`, and (for `LookupCall`) `expectedLookups.length == 0`.
-- `callCount > 0` requires `failed == true`, the tagged hash schema, and `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length`.
-- `l2ToL1Calls.length > 0` with `callCount == 0` is invalid for failed lookups (`UnconsumedL2ToL1Calls` would fire).
-- `expectedL1ToL2Calls.length > 0` requires `callCount >= 1` — a nested reentrant frame can only be entered from a top-level call.
-- Static sub-calls use the **untagged** hash (`keccak256(prev, success, retData)` per sub-call); failed sub-executions use the **tagged** hash.
-- A nested `ExpectedLookup` resolves only from the active host's `expectedLookups[]`; a `LookupCall` resolves only from the pool and only when `!_insideExecution()`.
-- A reverted lookup always reverts with `returnData`; a static lookup returns it — or reverts with it, if that static read is itself `failed`.
+- **Prover convention only — not enforced on-chain:** `failed == false` should have `callCount == 0`, `expectedL1ToL2Calls.length == 0`, and (for `LookupCall`) `expectedLookups.length == 0`. Static resolution (`_resolveStaticLookup`) never reads any of these three fields, so a mismatched value here is simply dead data — it does not revert.
+- Enforced by `_executeRevertedLookup`'s end-of-frame checks, when a `failed == true` lookup is resolved via the regular-`CALL` route: `callCount > 0` requires the tagged hash schema and `callCount + Σ expectedL1ToL2Calls[i].callCount == l2ToL1Calls.length`.
+- Enforced the same way: `l2ToL1Calls.length > 0` with `callCount == 0` is invalid for a `failed` lookup resolved via the regular-`CALL` route (`UnconsumedL2ToL1Calls` fires).
+- Enforced the same way: `expectedL1ToL2Calls.length > 0` requires `callCount >= 1` — a nested reentrant frame can only be entered from a top-level call.
+- Static sub-calls use the **untagged** hash (`keccak256(prev, success, retData)` per sub-call, run by `_processNStaticCalls`); reverted-lookup sub-executions use the **tagged** hash (run by `_processNCalls`). Using the wrong schema fails `RollingHashMismatch` regardless of which route resolves the entry.
+- A nested `ExpectedLookup` resolves only from the active host's `expectedLookups[]`; a top-level `LookupCall` resolves only from the pool and only when `!_insideExecution()`.
+- Which *function* resolves a lookup depends on the caller's opcode, not on `failed`: a `STATICCALL` always resolves through `staticCallLookup` (returns `returnData`, or reverts with it if `failed == true`); a regular `CALL` can only resolve a `failed == true` lookup, and only via the miss-path fallback into `_executeRevertedNestedLookup` / `_executeRevertedTopLevelLookup` (always reverts with `returnData`).
 
 :::note
 For top-level lookups, the prover decides which rollups to pin in `expectedStateRoots`. An empty array is valid and matches unconditionally. Pin aggressively when the cached read must be consistent with a specific cross-rollup interleaving; omit pins for reads that are state-independent.
