@@ -154,4 +154,9 @@ If the on-chain execution diverges from what the proof committed to, the entry r
 
 In all cases, the correct response is to re-simulate the execution against the current state and generate a new batch.
 
-> **For builders:** the exact revert is `error RollingHashMismatch()`, declared in `src/base/EEZBase.sol` and shared by both L1 and L2.
+<details>
+<summary>For builders: exact revert</summary>
+
+The exact revert is `error RollingHashMismatch()`, declared in `src/base/EEZBase.sol` and shared by both L1 and L2.
+
+</details>
