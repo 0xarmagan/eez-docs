@@ -27,7 +27,7 @@ The proxy gives each remote identity its own Ethereum address on the local chain
 
 ## Deterministic Address Computation
 
-The proxy address is a `CREATE2` hash of three ingredients: the `(originalRollupId, originalAddress)` pair (as the salt), the `CrossChainProxy` bytecode, and the manager address (baked into the bytecode via constructor arguments). Any contract can compute the address offline without a registry lookup — just call `computeCrossChainProxyAddress(originalAddress, originalRollupId)` on the manager.
+The proxy address is a `CREATE2` hash of three ingredients: the `(originalRollupId, originalAddress)` pair (as the salt), the `CrossChainProxy` creation code, and its constructor arguments — the manager address, the original address, and the original rollup ID — all baked into the bytecode hash. Any contract can compute the address offline without a registry lookup — just call `computeCrossChainProxyAddress(originalAddress, originalRollupId)` on the manager.
 
 Two properties follow. The address is **fully deterministic**: you can pre-compute and hard-code it before the proxy has ever been deployed. It is also **manager-scoped**: the same `(originalAddress, originalRollupId)` pair on two different manager deployments (or on L1 vs. L2) produces two different proxy addresses, so proxies from different EEZ deployments can never be confused.
 
