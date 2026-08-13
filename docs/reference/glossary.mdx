@@ -31,6 +31,10 @@ An entry's `proxyEntryHash` determines how it is consumed:
 - `bytes32(0)` — an **immediate** entry (also called an L2TX). Consumed by `postAndVerifyBatch`'s inline immediate-drain loop or by `executeL2TX(rollupId)`.
 - Non-zero — a **proxy-triggered** entry. Consumed when a [`CrossChainProxy`](#crosschainproxy) call produces a matching `crossChainCallHash`.
 
+## Immediate entry skip
+
+The self-call `postAndVerifyBatch` makes (`attemptApplyImmediate`) for each immediate entry (`proxyEntryHash == bytes32(0)`) during inline drain, before the meta hook fires. `attemptApplyImmediate` wraps the entry in a `try/catch`: if it reverts mid-execution, EEZ emits `ImmediateEntrySkipped` and the cursor still advances to the next entry — unlike a persistent (deferred) entry, where a revert blocks the whole queue instead of being skipped. This is what lets you gate several immediate alternatives on different [`StateDelta`](#statedelta) `currentState` values and stack them: a non-matching one is skipped cleanly rather than stalling consumption. See [Caveats](/reference/caveats#queue-blocking-on-revert) for the full contrast with persistent-queue behavior.
+
 ## Transient vs deferred
 
 A batch's `entries` array is partitioned by `transientExecutionEntryCount`:

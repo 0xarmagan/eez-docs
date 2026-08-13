@@ -20,7 +20,7 @@ Each rollup's execution queue encodes exactly one valid consumption order. When 
 
 This means **you cannot stack multiple candidate entries** and rely on the first one that matches to apply. The queue is not a competing-candidates pool; it is a strict ordered sequence.
 
-**The one exception** is the `IMMEDIATE` prefix. `attemptApplyImmediate` wraps each immediate entry in a `try/catch`, so a reverting immediate entry emits `ImmediateEntrySkipped` and the cursor advances. You can use immediate entries with a `StateDelta.currentState` gate to create alternatives — only the entry whose `currentState` matches the live state root will succeed, and the others are skipped cleanly.
+**The one exception** is the `IMMEDIATE` prefix — see [Immediate entry skip](/reference/glossary#immediate-entry-skip). `attemptApplyImmediate` wraps each immediate entry in a `try/catch`, so a reverting immediate entry emits `ImmediateEntrySkipped` and the cursor advances. You can use immediate entries with a `StateDelta.currentState` gate to create alternatives — only the entry whose `currentState` matches the live state root will succeed, and the others are skipped cleanly.
 
 For persistent (non-immediate) entries, there is no such tolerance. Build your execution entries carefully and verify them against the exact state root trajectory before posting.
 
