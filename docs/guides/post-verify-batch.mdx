@@ -228,9 +228,10 @@ The entry's `returnData` is `abi.encode("World")`. `h1.helloL2World()` decodes i
 | Each entry's `stateDeltas[].rollupId` strictly ascending (no mainnet/`0` delta) and present in the batch | `StateDeltasNotStrictlyIncreasing(rid)` / `RollupNotInBatch(rid)` |
 | Each entry's `destinationRollupId` present among that entry's own `stateDeltas[].rollupId` | `EntryDestinationNotInStateDeltas(rid)` |
 | Each entry's `l2ToL1Calls[].sourceRollupId` and `expectedL1ToL2Calls[].destinationRollupId` must be one of that entry's own verified (`stateDeltas`) rollups | `CallSourceNotVerified(rid)` / `ReentrantDestinationNotVerified(rid)` |
-| Each entry's `expectedLookups[].destinationRollupId` (recursively, including nested sub-calls) must be one of that entry's verified rollups | `ReentrantDestinationNotVerified(rid)` |
+| Each entry's `expectedLookups[].destinationRollupId` must be one of that entry's verified rollups — a single pass over the entry's own flat `expectedLookups[]` array, not literal recursion (each lookup's own sub-calls are checked by a separate, non-recursive call) | `ReentrantDestinationNotVerified(rid)` |
 | Top-level lookup `expectedStateRoots[].rollupId` strictly ascending (no mainnet/`0` pin) and present in the batch | `ExpectedStateRootsNotStrictlyIncreasing(rid)` / `RollupNotInBatch(rid)` |
 | Top-level lookup's `destinationRollupId` must be one of its own `expectedStateRoots[].rollupId` pins | `LookupDestinationNotPinned(rid)` |
+| The two rows above (call sources/reentrant destinations, and lookup destinations) run again for top-level `l1ToL2lookupCalls[]` entries too, checked against that lookup's own pinned rollups rather than an entry's `stateDeltas` (`EEZ.sol:584-585`) | `CallSourceNotVerified(rid)` / `ReentrantDestinationNotVerified(rid)` |
 | No re-entry (`_transientExecutions.length == 0`) | `PostBatchReentry` |
 | `transientExecutionEntryCount == 0` requires `transientLookupCallCount == 0` | `TransientLookupCallsWithoutTransientEntries` |
 
