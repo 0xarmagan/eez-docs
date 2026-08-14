@@ -179,8 +179,8 @@ function setStateRoot(bytes32 newStateRoot) external onlyOwner
 | --- | --- |
 | `OwnableUnauthorizedAccount` | `msg.sender` is not the current owner. |
 | `NotRollupContract` (from EEZ) | This contract is no longer the registered manager for its `rollupId` — should not happen in normal operation. |
-| `RollupBatchActiveThisBlock(uint256)` (from EEZ) | A `postAndVerifyBatch` has already verified this rollup in the current block. Wait until the next block. |
 | `SetStateRootNotAllowedDuringExecution` (from EEZ) | A cross-chain execution is currently active. |
+| `RollupBatchActiveThisBlock(uint256)` (from EEZ) | A `postAndVerifyBatch` has already verified this rollup in the current block. Wait until the next block. |
 
 </details>
 
