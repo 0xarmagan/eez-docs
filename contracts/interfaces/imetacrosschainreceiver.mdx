@@ -24,19 +24,19 @@ interface IMetaCrossChainReceiver {
 function executeMetaCrossChainTransactions() external
 ```
 
-Called by the EEZ registry after the transient execution entries are loaded and any leading immediate entries have been applied inline. At the moment your implementation receives this callback, the transient execution table is populated and all participating rollups have `lastVerifiedBlock(rollupId) == block.number`, so `executeCrossChainCall` and `executeL2TX(rollupId)` will succeed for any registered proxy.
+Called by the EEZ registry after the transient execution entries are loaded and any leading immediate entries have been applied inline. At the moment your implementation receives this callback, the transient execution table is populated and all participating rollups have `lastVerifiedBlock(rollupId) == block.number`, so `executeCrossChainCall` and `executeL2Txs(rollupId)` will succeed for any registered proxy.
 
-Your implementation should call the cross-chain proxies whose entries are in the transient table. Each proxy call routes through `executeCrossChainCall`, which advances the transient execution cursor. The registry does not enforce that you consume every entry — any transient entries you leave unconsumed are simply not executed (the registry performs no cleanup gate after the hook returns). Remaining entries that were in the persistent split of the batch are published unconditionally to per-rollup queues for later consumption by standalone `executeCrossChainCall` or `executeL2TX(rollupId)` transactions.
+Your implementation should call the cross-chain proxies whose entries are in the transient table. Each proxy call routes through `executeCrossChainCall`, which advances the transient execution cursor. The registry does not enforce that you consume every entry — any transient entries you leave unconsumed are simply not executed (the registry performs no cleanup gate after the hook returns). Remaining entries that were in the persistent split of the batch are published unconditionally to per-rollup queues for later consumption by standalone `executeCrossChainCall` or `executeL2Txs(rollupId)` transactions.
 
 If your implementation reverts, the entire `postAndVerifyBatch` call reverts with it. Design your hook to be robust or wrap individual proxy calls in `try/catch` when partial failures are acceptable.
 
-**When EEZ calls this:** Step 6 of `postAndVerifyBatch`, after:
+**When EEZ calls this:** Step 7 of `postAndVerifyBatch`, after:
 1. Proof verification.
 2. Per-rollup queue wipe and `lastVerifiedBlock` update.
-3. Transient table population.
-4. Inline drain of leading immediate entries (those with `proxyEntryHash == 0`).
+3. Inline drain of leading immediate entries (those with `proxyEntryHash == 0`).
+4. Transient table population.
 
-The hook fires only if `_transientExecutionIndex < _transientExecutions.length` (there are still unconsumed transient entries) AND `msg.sender.code.length > 0`.
+The hook fires only if the immediate-entry drain loop stopped before reaching the end of the batch's leading prefix — i.e. `i < immediateEntryCount`, where `i` is the loop cursor left behind after draining consecutive L2Tx entries (`proxyEntryHash == 0`) from the front of the batch, so there's at least one non-L2Tx entry still to hand off — AND `msg.sender.code.length > 0`. The transient tables (`_transientEntries` / `_transientStaticEntries`) are populated from that remaining slice only when both conditions hold, immediately before the hook is invoked.
 
 ---
 
@@ -135,6 +135,6 @@ contract FlashLoanBridgeExecutor is IMetaCrossChainReceiver {
 
 **Always verify `msg.sender`.** Anyone can call `executeMetaCrossChainTransactions` on your contract if you leave it unguarded. Check that `msg.sender == address(eez)` at the top of your implementation.
 
-**Reentrancy.** Your hook runs inside `postAndVerifyBatch`. The registry's reentry guard (`PostBatchReentry`) prevents a nested `postAndVerifyBatch` call from your hook, but you can freely call `executeCrossChainCall` and `executeL2TX`. Do not attempt to call `postAndVerifyBatch` again from within the hook.
+**Reentrancy.** Your hook runs inside `postAndVerifyBatch`. The registry's reentry guard (`PostBatchReentry`) prevents a nested `postAndVerifyBatch` call from your hook, but you can freely call `executeCrossChainCall` and `executeL2Txs`. Do not attempt to call `postAndVerifyBatch` again from within the hook.
 
 **No consumption obligation.** The registry does not check whether your hook consumed all transient entries. Unconsumed transient entries are silently abandoned — they will not appear in per-rollup queues (only the persistent split of the batch goes there). If you need entries to survive across transactions, place them in the persistent split (`transientExecutionEntryCount < entries.length`).
