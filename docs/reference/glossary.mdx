@@ -21,23 +21,23 @@ EEZ is designed with based rollups as its primary target audience. Non-based rol
 A lightweight CREATE2 contract that stands in for exactly one `(originalAddress, originalRollupId)` pair on the local chain. Every contract on every chain sees the same proxy address for the same remote identity, so `msg.sender`-based access control works across rollups just as it does same-chain.
 
 - Deployed by `createCrossChainProxy(originalAddress, originalRollupId)` on [`EEZ`](/contracts/eez) or [`EEZL2`](/contracts/eezl2); the address is fully deterministic and can be pre-computed with `computeCrossChainProxyAddress`.
-- Detects `STATICCALL` context via an EIP-1153 `tstore` self-call trick and routes to `staticCallLookup` instead of `executeCrossChainCall` when it is inside a read-only frame.
+- Detects `STATICCALL` context via an EIP-1153 `tstore` self-call trick and routes to `staticCrossChainCall` instead of `executeCrossChainCall` when it is inside a read-only frame.
 - Cannot represent an address on its own chain — `originalRollupId == 0` on L1 or `originalRollupId == ROLLUP_ID` on L2 reverts `SameNetworkProxy`.
 
 See [Cross-Chain Proxy](/concepts/cross-chain-proxy) for the full formula and routing logic.
 
 ## ExecutionEntry
 
-The central pre-computed record for a single cross-chain interaction. Every entry carries a flat call array, expected reentrant call table, expected lookup table, state deltas, pre-computed return data, and the expected [`rollingHash`](#rollinghash). See [Build Entries](/guides/build-execution-entries) for the field-by-field breakdown and [Data Types](/contracts/data-types) for the raw struct.
+The central pre-computed record for a single cross-chain interaction. Every entry carries per-rollup [`StateUpdate`](#stateupdate)s (`stateUpdates`), a flat call array (`l2ToL1Calls`), the unified reentrant-call table (`expectedL1ToL2Calls`) covering successful, static, and reverted reentrant calls, pre-computed return data, and the expected [`rollingHash`](#rollinghash). See [Build Entries](/guides/build-execution-entries) for the field-by-field breakdown and [Data Types](/contracts/data-types) for the raw struct.
 
 An entry's `proxyEntryHash` determines how it is consumed:
 
-- `bytes32(0)` — an **immediate** entry (also called an L2TX). Consumed by `postAndVerifyBatch`'s inline immediate-drain loop or by `executeL2TX(rollupId)`.
+- `bytes32(0)` — an **immediate** entry (also called an L2TX). Consumed by `postAndVerifyBatch`'s inline immediate-drain loop or by `executeL2Txs(rollupId)`.
 - Non-zero — a **proxy-triggered** entry. Consumed when a [`CrossChainProxy`](#crosschainproxy) call produces a matching `crossChainCallHash`.
 
 ## Immediate entry skip
 
-The self-call `postAndVerifyBatch` makes (`attemptApplyImmediate`) for each immediate entry (`proxyEntryHash == bytes32(0)`) during inline drain, before the meta hook fires. `attemptApplyImmediate` wraps the entry in a `try/catch`: if it reverts mid-execution, EEZ emits `ImmediateEntrySkipped` and the cursor still advances to the next entry — unlike a persistent (deferred) entry, where a revert blocks the whole queue instead of being skipped. This is what lets you gate several immediate alternatives on different [`StateDelta`](#statedelta) `currentState` values and stack them: a non-matching one is skipped cleanly rather than stalling consumption. See [Caveats](/reference/caveats#queue-blocking-on-revert) for the full contrast with persistent-queue behavior.
+The self-call `postAndVerifyBatch` makes (`_attemptExecuteImmediateL2Txs`) for each immediate entry (`proxyEntryHash == bytes32(0)`) during inline drain, before the meta hook fires. `_attemptExecuteImmediateL2Txs` wraps the entry in a `try/catch`: if it reverts mid-execution, EEZ emits `L2TxSkipped` and the cursor still advances to the next entry. Persistent (deferred) entries are actually skipped the same way at *match* time — a non-matching candidate's cursor simply moves past it — but an entry that already matched and then reverts mid-execution blocks the whole queue instead. This is what lets you gate several immediate (or persistent) alternatives on different [`StateUpdate`](#stateupdate) `currentState` values and stack them: a non-matching one is skipped cleanly rather than stalling consumption. See [Caveats](/reference/caveats#queue-blocking-on-revert) for the full contrast between match-time skipping and execution-time blocking.
 
 ## Meta hook
 
@@ -57,21 +57,31 @@ Typical use case: a call that ran successfully on the destination chain but whos
 
 ## RollingHash
 
-A single `bytes32` accumulator that chains every call outcome and every reentrant nesting boundary through a tagged Keccak fold. Each [`ExecutionEntry`](#executionentry) and each [`LookupCall`](/contracts/data-types) carries an expected `rollingHash`; execution replays every call, accumulates the same four tagged events (`CALL_BEGIN`, `CALL_END`, `NESTED_BEGIN`, `NESTED_END`) into `_rollingHash`, and reverts `RollingHashMismatch` on any divergence.
+A single `bytes32` accumulator that chains every call outcome and every reentrant nesting boundary through a tagged Keccak fold. Each [`ExecutionEntry`](#executionentry) carries an expected `rollingHash`; execution replays every call and accumulates the same five tagged events (`CALL_BEGIN`, `CALL_END`, `NESTED_BEGIN`, `NESTED_END`, `CALL_NOT_FOUND`) into `_rollingHash`, reverting `RollingHashMismatch` on any divergence.
+
+STATIC-kind rows of the unified reentrant table and top-level [`StaticExecutionEntry`](#staticexecutionentry) entries also carry an expected `rollingHash`, but it's checked against a separate, untagged accumulator (`keccak256(prev, success, returnData)` folded per sub-call) rather than the tagged event stream above — see [Reading Cross-Chain State with Static Entries](/guides/lookup-calls#field-reference).
 
 Wrong return data, an extra call, a missing callback, or reordered operations all change the final hash. This is the primary integrity guarantee that lets EEZ safely execute a pre-committed off-chain simulation on-chain. See [Rolling Hash](/concepts/rolling-hash) for the exact accumulator formulas.
 
 ## rollupId
 
-A `uint256` identifier assigned by the [`EEZ`](/contracts/eez) registry when a rollup calls `registerRollup`. Every cross-chain call, execution entry, state delta, and proxy identity is keyed by `rollupId`.
+A `uint64` identifier assigned by the [`EEZ`](/contracts/eez) registry when a rollup calls `registerRollup`. Every cross-chain call, execution entry, state update, and proxy identity is keyed by `rollupId`.
 
 - **`rollupId == 0` is the mainnet sentinel** (`MAINNET_ROLLUP_ID`). L1 itself is always `0` in every cross-chain call hash computation. You **cannot** register a rollup with ID `0`, and cannot construct an [`EEZL2`](/contracts/eezl2) with `_rollupId == 0` (constructor reverts `InvalidRollupId`). The "cannot create a `CrossChainProxy` for your own chain" rule is chain-relative, not a flat `originalRollupId == 0` check — see the [`CrossChainProxy`](#crosschainproxy) entry for the exact condition.
 - **Registered rollup IDs start at `1`** and are assigned sequentially in the order rollups are registered.
 - Once assigned, a `rollupId` is permanent — the manager address bound to it in the registry is immutable.
 
-## StateDelta
+## StateUpdate
 
-The struct describing one rollup's state transition caused by executing one [`ExecutionEntry`](#executionentry): a `rollupId`, the `currentState` root expected before the entry applies (checked on-chain, reverts `StateRootMismatch` on mismatch), the `newState` root to write after, and a signed `etherDelta` for the rollup's ETH balance change. This content-addressing is what prevents a stale or reordered entry from silently applying to the wrong chain state. See [Data Types](/contracts/data-types#statedelta) for the raw struct and field table.
+The struct describing one rollup's state transition caused by executing one [`ExecutionEntry`](#executionentry): a `rollupId` (`uint64`), the `currentState` root expected before the entry applies (checked on-chain, reverts `StateRootMismatch` on mismatch), the `newState` root to write after, and a signed `etherDelta` for the rollup's ETH balance change. This content-addressing is what prevents a stale or reordered entry from silently applying to the wrong chain state. See [Data Types](/contracts/data-types#stateupdate) for the raw struct and field table.
+
+## StaticExecutionEntry
+
+A pre-computed TOP-LEVEL static entry: a read-only cross-chain call resolved via `staticCrossChainCall` *outside* any execution, from the pool (L1: `_transientStaticEntries` while a batch is mid-flight, else the per-rollup `staticEntryQueue`; L2: the `staticEntries` pool). A reverting top-level read lands here (`success == false`); a state-changing top-level call is an [`ExecutionEntry`](#executionentry) instead, and a *reentrant* read (fired inside an execution) is a STATIC-kind row of the unified reentrant table (`isStatic` folded into its `crossChainCallHash`), not a `StaticExecutionEntry`.
+
+L1's struct (`src/interfaces/IEEZ.sol`) carries `expectedStateRoots` (per-rollup state-root pins — part of the match predicate, not just a freshness check), `proxyEntryHash`, `l2ToL1Calls` (read-only sub-calls run via `STATICCALL`), `rollingHash` (the untagged accumulator — see [RollingHash](#rollinghash)), `destinationRollupId`, `success`, and `returnData`. L2's mirror (`src/interfaces/IEEZL2.sol`) drops the L1-only `expectedStateRoots` and `destinationRollupId` fields — L2 has no pins, so the same-block load gate (`lastLoadBlock == block.number`) alone bounds staleness.
+
+Matching is a full scan on `proxyEntryHash` + `destinationRollupId` + every `expectedStateRoots` pin live (L1) or `proxyEntryHash` alone, same-block only (L2); a non-matching candidate is simply skipped, never an error. There is no block gate on the L1 top-level static path — a pinned entry stays resolvable as long as its state-root pins match the live roots; its lifetime is instead bounded by the per-rollup queue reset on the next batch that verifies that rollup. See [Reading Cross-Chain State with Static Entries](/guides/lookup-calls) for the full routing and resolution mechanics.
 
 ## System address
 
@@ -79,13 +89,13 @@ The privileged, node-controlled address hard-coded as an immutable on every [`EE
 
 - Never has a human-accessible private key. It is assumed to be driven by the rollup node's block-production logic.
 - Never reachable via reentrant proxy paths, so the execution table cannot be swapped or wiped mid-execution by an attacker.
-- On successful `executeCrossChainCall` invocations, any `msg.value` the user attaches is forwarded to `SYSTEM_ADDRESS` — this is the L2-side ETH burn path. Value accounting lives on L1 via [`StateDelta.etherDelta`](/guides/build-execution-entries).
+- On successful `executeCrossChainCall` invocations, any `msg.value` the user attaches is forwarded to `SYSTEM_ADDRESS` — this is the L2-side ETH burn path. Value accounting lives on L1 via [`StateUpdate.etherDelta`](/guides/build-execution-entries).
 
 ## Transient vs deferred
 
-A batch's `entries` array is partitioned by `transientExecutionEntryCount`:
+A batch's `entries` array is partitioned by `immediateEntryCount`:
 
-- **Transient entries** (`entries[0..transientExecutionEntryCount)`) are copied into `_transientExecutions` during `postAndVerifyBatch` and are only reachable **inside that same transaction**. They power the meta-hook consumption pattern and are always drained (via inline immediate execution, the meta hook, or both) before the call returns. Cross-rollup interactions inside the meta hook are only supported between rollups verified together in the same batch — see [Caveats](/reference/caveats#transient-phase-isolation).
-- **Deferred (persistent) entries** (`entries[transientExecutionEntryCount..]`) are pushed into per-rollup `executionQueue` storage at the end of `postAndVerifyBatch`. They are consumed in separate transactions later in the **same L1 block** via `executeCrossChainCall` or `executeL2TX`. Any entry not consumed before the block ends is stranded — the `lastVerifiedBlock` gate rejects it in every future block, and the next batch to touch that rollup overwrites the queue.
+- **Transient entries** (the prefix past the leading immediate L2Tx run, `entries[..immediateEntryCount)`) are copied into `_transientEntries` during `postAndVerifyBatch` and are only reachable **inside that same transaction**. They power the meta-hook consumption pattern and are always drained (via inline immediate execution, the meta hook, or both) before the call returns. Cross-rollup interactions inside the meta hook are only supported between rollups verified together in the same batch — see [Caveats](/reference/caveats#transient-phase-isolation).
+- **Deferred (persistent) entries** (`entries[immediateEntryCount..]`) are pushed into per-rollup `entryQueue` storage at the end of `postAndVerifyBatch`. They are consumed in separate transactions later in the **same L1 block** via `executeCrossChainCall` or `executeL2Txs`. Any entry not consumed before the block ends is stranded — the `lastVerifiedBlock` gate rejects it in every future block, and the next batch to touch that rollup overwrites the queue.
 
 Both modes enforce identical proof, state-root, and rolling-hash invariants; the split is a gas-optimisation parameter, not a security parameter. See [Post Batch](/guides/post-verify-batch) for the full step-by-step.
