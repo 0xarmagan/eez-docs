@@ -55,7 +55,7 @@ Call `registerRollup` on the central registry, passing your deployed manager and
 ```solidity
 function registerRollup(address rollupContract, bytes32 initialState)
     external
-    returns (uint256 rollupId)
+    returns (uint64 rollupId)
 ```
 
 Reverts `InvalidRollupContract` if `rollupContract` is `address(0)` or the registry itself.
@@ -65,7 +65,7 @@ cast send $EEZ "registerRollup(address,bytes32)" $ROLLUP_CONTRACT $INITIAL_STATE
   --rpc-url $L1_RPC --private-key $PK
 
 # Confirm the assigned rollupId and stored state root on-chain:
-cast call $EEZ "rollups(uint256)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
+cast call $EEZ "rollups(uint64)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
 # Returns: (rollupContract, initialState, etherBalance)
 ```
 
@@ -74,7 +74,7 @@ cast call $EEZ "rollups(uint256)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
 As part of the same transaction, `registerRollup` calls back into your manager:
 
 ```solidity
-function rollupContractRegistered(uint256 _rollupId) external {
+function rollupContractRegistered(uint64 _rollupId) external {
     if (msg.sender != ROLLUPS) revert NotEEZRegistry();  // registry-only
     if (rollupId != 0) revert AlreadyRegistered();        // one-shot
     rollupId = _rollupId;
