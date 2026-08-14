@@ -12,17 +12,17 @@ EEZ is an **early-stage, unaudited implementation**. Interfaces, storage layout,
 
 ## Queue Blocking on Revert
 
-:::warning
-A reverting entry in a persistent execution queue **blocks the entire queue** — it does not get skipped.
+:::note
+Match-time failures are skipped; only an already-matched entry that reverts mid-execution blocks the queue.
 :::
 
-Each rollup's execution queue encodes exactly one valid consumption order. When `executeCrossChainCall` attempts to consume a persistent entry and that entry reverts mid-execution — for example, because of a `StateRootMismatch` or `RollingHashMismatch` — the consuming transaction reverts without advancing the queue cursor. The entry remains at the front of the queue.
+Consumption forward-scans the queue (`_findMatchingEntry`) for the first entry matching identity (`proxyEntryHash`), routing (`destinationRollupId`), **and** state preconditions (every [`StateUpdate`](/reference/glossary#stateupdate)`.currentState` equal to the live root). A non-matching candidate is skipped cleanly — the cursor moves past it and it never executes. This means **you CAN stack multiple candidate entries** in a persistent queue, each gated by a different `currentState`: only the one matching the live state root is consumed, and the others are skipped without any transaction reverting. If none of the candidates match, the call reverts `ExecutionNotFound`.
 
-This means **you cannot stack multiple candidate entries** and rely on the first one that matches to apply. The queue is not a competing-candidates pool; it is a strict ordered sequence.
+The blocking behavior applies only to an entry that has **already matched** identity, routing, and state — and then reverts mid-execution (for example, `RollingHashMismatch` or `EtherDeltaMismatch`). That case reverts the whole consuming transaction **without** advancing the queue cursor: the entry remains at the front of the queue, and a retry re-matches the same entry.
 
-**The one exception** is the `IMMEDIATE` prefix — see [Immediate entry skip](/reference/glossary#immediate-entry-skip). `attemptApplyImmediate` wraps each immediate entry in a `try/catch`, so a reverting immediate entry emits `ImmediateEntrySkipped` and the cursor advances. You can use immediate entries with a [`StateDelta`](/reference/glossary#statedelta)`.currentState` gate to create alternatives — only the entry whose `currentState` matches the live state root will succeed, and the others are skipped cleanly.
+**The `IMMEDIATE` prefix is more forgiving still** — see [Immediate entry skip](/reference/glossary#immediate-entry-skip). `_attemptExecuteImmediateL2Txs` wraps each leading immediate entry in a `try/catch`, so a reverting immediate entry emits `L2TxSkipped` and the cursor advances (though if the immediate run is non-empty and every entry in it reverts, the whole post is unwound with `AllImmediateL2TxsFailed`).
 
-For persistent (non-immediate) entries, there is no such tolerance. Build your execution entries carefully and verify them against the exact state root trajectory before posting.
+Build your persistent execution entries so their `StateUpdate.currentState` gates correctly reflect the state root(s) you expect at consumption time, and design intentionally if you want to stack alternatives gated on different roots.
 
 ## Transient-Phase Isolation
 
@@ -71,9 +71,9 @@ This means that the same logical action observed on L1 vs. L2 will see different
 
 ## Block Gating: Entries Are Valid for One Block Only
 
-Execution entries posted in a `postAndVerifyBatch` are **only consumable within the same L1 block** they were posted. The `RollupVerification.lastVerifiedBlock` field doubles as a read gate: `executeCrossChainCall` and `executeL2TX` both check `lastVerifiedBlock(rollupId) == block.number` and revert if the check fails.
+Execution entries posted in a `postAndVerifyBatch` are **only consumable within the same L1 block** they were posted. The `RollupVerification.lastVerifiedBlock` field doubles as a read gate: `executeCrossChainCall` and `executeL2Txs` both check `lastVerifiedBlock(rollupId) == block.number` and revert if the check fails.
 
-`staticCallLookup` does **not** enforce this gate. It is a `view` function that scans the active/persistent lookup tables for a matching entry and returns it regardless of which block that entry was posted in — static reads deliberately skip the block-freshness check that state-mutating consumption enforces.
+`staticCrossChainCall` does **not** enforce this gate for its top-level pool path. It is a `view` function that scans the active/persistent static-entry tables for a matching entry and returns it regardless of which block that entry was posted in — static reads deliberately skip the block-freshness check that state-mutating consumption enforces.
 
 Practical consequences:
 
@@ -86,25 +86,25 @@ Design your execution flow so that `postAndVerifyBatch` and all consuming calls 
 ## State Root Staleness
 
 :::note
-Top-level `LookupCall` entries on L1 use `expectedStateRoots` to pin a cached read to a specific point in the rollup's state trajectory. An empty `expectedStateRoots` array matches unconditionally.
+Top-level [`StaticExecutionEntry`](/reference/glossary#staticexecutionentry) entries on L1 use `expectedStateRoots` to pin a cached read to a specific point in each referenced rollup's state trajectory. Pinning is mandatory, not optional: the entry's own `destinationRollupId` must appear in `expectedStateRoots`, or the batch reverts `StaticEntryDestinationNotPinned` at publish time — likewise, every rollup any of the entry's read-only sub-calls sources from must also be pinned, or the batch reverts `CallSourceNotVerified`. An unconditional, unpinned match is not possible.
 :::
 
-When a top-level `LookupCall` is published without any `expectedStateRoots` pins, it can match against any state root. This is intentional for state-independent reads but can lead to stale data being returned if you are not careful:
+Mandatory pinning closes the specific bug where an entry with no pins at all could resolve against whatever state root happened to be live at read time. What remains your responsibility is pinning the **correct** root:
 
-- If you publish a lookup that records the return value of a remote read, and the remote state has since advanced, the lookup still matches and returns the old value.
-- For correctness, always pin `expectedStateRoots` to the specific state root(s) your off-chain prover observed when computing `returnData`.
+- If you publish a `StaticExecutionEntry` that records the return value of a remote read, pin `expectedStateRoots` to the exact state root(s) your off-chain prover observed when computing `returnData` — not a later or earlier one.
+- If the pinned root no longer matches the live root by the time someone resolves the entry (because the remote state advanced), resolution simply misses that candidate rather than returning stale data — see the match predicate in [`staticCrossChainCall`](/guides/lookup-calls#routing-how-a-read-reaches-staticcrosschaincall).
 
 State-root pinning is split-independent (does not depend on the transient/persistent split), transient-phase capable (roots advance entry-by-entry during a batch), and robust across same-block re-verifications (the root trajectory continues coherently).
 
-## No Skipping on Persistent Revert — Summary Table
+## Match-Time Skip vs. Execution-Time Block — Summary Table
 
-| Execution mode | Revert behavior |
-|---|---|
-| Persistent queue entry | Reverts consuming tx, queue cursor does NOT advance (queue blocked) |
-| Immediate entry (`attemptApplyImmediate`) | `ImmediateEntrySkipped` event, cursor advances |
-| Transient entry (within `postAndVerifyBatch`) | Reverts the entire batch tx |
-| `LookupCall` outside execution | Miss → scan continues to next candidate |
-| `ExpectedLookup` nested (inside execution) | Must match exactly; miss reverts |
+| Execution mode | Non-matching candidate | Matched, then reverts mid-execution |
+|---|---|---|
+| Persistent queue entry | Skipped cleanly, cursor moves past it | Reverts consuming tx, queue cursor does NOT advance (queue blocked) |
+| Immediate entry (`_attemptExecuteImmediateL2Txs`) | — (leading prefix, always attempted) | `L2TxSkipped` event, cursor advances |
+| Transient entry (within `postAndVerifyBatch`) | Skipped cleanly, cursor moves past it | Reverts the entire batch tx |
+| STATIC-kind row of `ExpectedL1ToL2Call` / `ExpectedOutgoingCrossChainCall` (reentrant, inside execution) | Reverts `ExecutionNotFound` directly (no fallback) | — (resolves per its own `success` flag, by design; never a mid-execution revert) |
+| Top-level `StaticExecutionEntry` (outside execution) | Miss → scan continues to next candidate | — (`view` function; resolves per its own `success` flag) |
 
 ## Early-Stage Status: What This Means for You
 
