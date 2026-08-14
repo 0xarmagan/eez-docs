@@ -141,7 +141,7 @@ function attemptApplyImmediate(uint256 transientIdx) public
 | --- | --- |
 | `NotSelf` | `msg.sender` is not the `EEZ` contract itself. |
 | `ResidualEntryEtherIn` | `_entryEtherDelta` is non-zero on entry — immediate entries carry no inbound value, so a non-zero accumulator signals a corrupted execution context. |
-| `StateRootMismatch(uint256)`, `RollingHashMismatch`, `UnconsumedL2ToL1Calls`, `UnconsumedL1ToL2Calls`, `EtherDeltaMismatch`, `ExecutionNotFound` | Propagated from the inner `_applyAndExecute` call — see `executeCrossChainCall`'s error table above for exactly when each condition fires. Caught by `postAndVerifyBatch`'s `try`/`catch`, so these never revert the batch itself — they only trigger `ImmediateEntrySkipped`. |
+| `StateRootMismatch(uint256)`, `RollingHashMismatch`, `UnconsumedL2ToL1Calls`, `UnconsumedL1ToL2Calls`, `EtherDeltaMismatch`, `InsufficientRollupBalance`, `StaticCallWithValue`, `ExecutionNotFound` | Propagated from the inner `_applyAndExecute` call (via `_applyStateDeltas` and `_processNCalls`) — see `executeCrossChainCall`'s error table above for exactly when each condition fires. Caught by `postAndVerifyBatch`'s `try`/`catch`, so these never revert the batch itself — they only trigger `ImmediateEntrySkipped`. |
 
 </details>
 
@@ -259,6 +259,7 @@ function executeInContextAndRevert(uint256 callCount) external
 | Error | Condition |
 | --- | --- |
 | `NotSelf` | `msg.sender` is not the `EEZ` contract itself. |
+| `StaticCallWithValue` | A flat call within the span (`_processNCalls(callCount)`) is flagged `isStatic` and carries a non-zero `value`. A `STATICCALL` cannot transfer ETH, so this reverts the frame with `StaticCallWithValue` before ever reaching the deliberate `ContextResult` revert below. |
 | `ContextResult(bytes32 rollingHash, uint256 reentrantConsumed, uint256 callsProcessed, bool callNotFound)` | Always reverted on the success path too — this is the function's only exit, not a failure signal. It carries the post-span rolling hash, reentrant-call cursor, flat-call cursor, and deferred no-match flag back to `_processNCalls`, which decodes it via `_decodeContextResult`. |
 
 </details>
