@@ -22,7 +22,7 @@ The EEZ manager auto-creates a proxy the first time it encounters a new `(addres
 <details>
 <summary>For builders: where auto-creation happens internally</summary>
 
-`_processNCalls` calls `_createCrossChainProxyInternal` if the proxy doesn't exist yet.
+`_processNCalls` calls `_createCrossChainProxyInternal` when `authorizedProxies[sourceProxy].originalAddress == address(0)` — i.e. the proxy has no registry entry yet, not a `code.length` check.
 
 </details>
 
@@ -166,7 +166,7 @@ address proxy = eez.createCrossChainProxy(0xAlice, 2);
 address predicted = eez.computeCrossChainProxyAddress(0xAlice, 2);
 ```
 
-EEZ auto-creates proxies during execution (the manager checks for code at the computed address and deploys if missing). For lookup sub-calls processed in a static context, however, proxies must already exist — deploying a contract is a state-mutating operation and cannot happen inside a `STATICCALL`. If a lookup needs a proxy that hasn't been deployed yet, the batch reverts.
+EEZ auto-creates proxies during execution: for each call, the manager checks whether `authorizedProxies[sourceProxy]` already has a registered `originalAddress` and deploys the proxy if that registry entry is still empty. For lookup sub-calls processed in a static context, however, proxies must already exist — deploying a contract is a state-mutating operation and cannot happen inside a `STATICCALL`. There, the manager instead checks the proxy address's `code.length`; if it's `0`, the batch reverts with `LookupCallProxyNotDeployed` rather than deploying on the fly.
 
 :::note
 A proxy always represents a **remote** identity. Creating a proxy for an address on the manager's own chain — `originalRollupId == 0` (`MAINNET_ROLLUP_ID`) on L1, or `originalRollupId == ROLLUP_ID` on L2 — reverts. See the [glossary](/reference/glossary#rollupid) for the `rollupId` numbering rules.
