@@ -157,7 +157,7 @@ A single mismatch anywhere — wrong return data, an extra call, a missing nesti
 
 ## Revert span and forced-revert execution
 
-The `revertSpan` field on each call (`L2ToL1Call` on L1, `CrossChainCall` on L2) is the protocol's mechanism for expressing calls whose EVM state effects must be rolled back even though the calls themselves succeed. Setting `revertSpan = N` on a call causes EEZ to execute the next N calls (including the call with the non-zero `revertSpan`), capture their results in the rolling hash, and then roll back all their EVM state changes. This is distinct from a naturally-reverting call (where `revertSpan = 0` and the proxy's `.call` captures `(false, returnData)` into `CALL_END`) — a `revertSpan > 0` call succeeds at the EVM level but has its state effects forcibly undone.
+The `revertSpan` field on each call (`L2ToL1Call` on L1, `CrossChainCall` on L2) is the protocol's mechanism for expressing calls whose EVM state effects must be rolled back, regardless of whether the call itself succeeds or fails. Setting `revertSpan = N` on a call causes EEZ to execute the next N calls (including the call with the non-zero `revertSpan`), capture their results (success or failure) in the rolling hash, and then roll back all their EVM state changes. This is distinct from a naturally-reverting call (where `revertSpan = 0` and the proxy's `.call` captures `(false, returnData)` into `CALL_END`, with no forced rollback beyond the EVM's own revert) — a `revertSpan > 0` span has its state effects forcibly undone regardless of whether the wrapped call succeeded or reverted on its own.
 
 The typical use case is a call that ran successfully on the destination chain but whose effects need to be rolled back on the source chain's view (for example, a collateral check that passed on L2 but whose side effects should not persist on L1).
 
@@ -169,7 +169,7 @@ The following describes what happens when `HelloWorldL1.helloL2World()` calls th
 2. `postAndVerifyBatch` verifies the proof, marks rollup ID 1 as verified for the current block, and loads the entry into the persistent queue.
 3. `HelloWorldL1.helloL2World()` calls the `CrossChainProxy` for `(HelloWorldL2, rollupId=1)`.
 4. The proxy calls `EEZ.executeCrossChainCall(sourceAddress, callData)`. EEZ computes the `crossChainCallHash` from the six-field formula, advances the rollup's queue cursor to the next entry, checks that `entry.proxyEntryHash` matches, verifies the rolling hash (zero, since no outbound L1 calls are made), applies the state delta, and returns `entry.returnData`.
-5. `HelloWorldL1.helloL2World()` decodes the return data and returns `"World"` to its caller.
+5. `HelloWorldL1.helloL2World()` decodes the return data (`"World"`) and wraps it into the greeting `"Hello World! This is EEZ."`, which it returns to its caller.
 
 On L2, in a coordinated but independent flow, the system address calls `EEZL2.executeIncomingCrossChainCall`, which loads the L2 entry and drives `HelloWorldL2.getWord()`. The rolling hash over `(CALL_BEGIN, callNumber=1)` → `(CALL_END, callNumber=1, success=true, retData=abi.encode("World"))` is verified, and execution completes.
 
