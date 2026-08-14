@@ -27,6 +27,8 @@ The `EEZ` contract is the heart of the EEZ protocol on Ethereum mainnet. It serv
 | `rollupCounter` | `uint256` (public) | Counter used to assign sequential rollup IDs. Incremented in `registerRollup`; the next registered rollup receives `rollupCounter + 1`. |
 | `rollups` | `mapping(uint256 => RollupConfig)` (public) | Maps a rollup ID to its `RollupConfig` (manager address, state root, ether balance). A zero `rollupContract` means the ID is unregistered. |
 | `authorizedProxies` | `mapping(address => ProxyInfo)` (public, inherited from `EEZBase`) | Maps a deployed `CrossChainProxy` address to the `(originalAddress, originalRollupId)` pair it represents. A zero `originalAddress` means the address is not a registered proxy. |
+| `_transientExecutions` | `ExecutionEntry[]` (public) | Backing storage for the batch's leading prefix of execution entries (per `transientExecutionEntryCount`). Populated by `postAndVerifyBatch` step 4 and `delete`d at the end of every call, success or failure — semantically transient even though it's declared as regular storage (Solidity doesn't yet support `transient` for reference types with nested dynamic arrays). |
+| `_transientLookupCalls` | `LookupCall[]` (public) | Backing storage for the batch's leading prefix of top-level lookup calls (per `transientLookupCallCount`). Same lifecycle as `_transientExecutions` — populated then `delete`d within a single `postAndVerifyBatch` call. |
 
 ---
 
@@ -77,7 +79,7 @@ function registerRollup(address rollupContract, bytes32 initialState)
 
 **Processing:** validates structure, fetches vkeys via `checkProofSystemsAndGetVkeys` (STATICCALL), verifies every proof atomically, marks each rollup as verified for the current block, drains leading transient entries inline (with a meta-hook on `msg.sender`), and publishes the remainder into per-rollup queues. See [Post Batch](/guides/post-verify-batch) for the full 8-step pipeline.
 
-**Emits:** `BatchPosted(rollupCount)`, `ImmediateEntrySkipped` (per skipped entry), `L2ExecutionPerformed`, `ExecutionConsumed`, `EntryExecuted`
+**Emits:** `BatchPosted(rollupCount)`, `ImmediateEntrySkipped` (per skipped entry), `L2ExecutionPerformed`, `ExecutionConsumed`, `EntryExecuted`, and (conditionally, from the immediate-entry drain's `_processNCalls`/`_consumeNestedAction` path) `CallResult`, `RevertSpanExecuted`, `L1ToL2CallConsumed`, `L1ToL2CallNotFound`
 
 ```solidity
 function postAndVerifyBatch(
@@ -96,21 +98,50 @@ function postAndVerifyBatch(
 | Error | Condition |
 | --- | --- |
 | `PostBatchReentry` | `postAndVerifyBatch` was called while a batch is already mid-flight (e.g., from the meta hook). |
-| `InvalidProofSystemConfig` | The batch is structurally malformed — empty `proofSystems`, length mismatch between `proofSystems` and `proofs`, empty `rollupIdsWithProofSystems`, an unregistered rollup, an out-of-range proof-system index, or an empty `proofSystemIndex` for a rollup. |
+| `InvalidProofSystemConfig` | The batch is structurally malformed — empty `proofSystems`, length mismatch between `proofSystems` and `proofs`, empty `rollupIdsWithProofSystems`, `rollupIdsWithProofSystems` not strictly increasing by `rollupId`, an unregistered rollup, an empty `proofSystemIndex` for a rollup, an out-of-range proof-system index, or `proofSystemIndex` not strictly increasing within a rollup. |
 | `DuplicateProofSystem(address)` | The `proofSystems` array is not strictly ascending (duplicates or address(0) detected). |
 | `StateDeltasNotStrictlyIncreasing(uint256)` | An entry's `stateDeltas` are not strictly increasing by `rollupId` — rejects duplicate rollups within one entry and (bounding above `MAINNET_ROLLUP_ID`) a mainnet (L1) delta. |
+| `RollupNotInBatch(uint256)` | A `StateDelta.rollupId` (within an entry) or an `ExpectedStateRootPerRollup.rollupId` (within a top-level lookup call's pins) is not in the batch's `rollupIdsWithProofSystems`. |
+| `EntryDestinationNotInStateDeltas(uint256)` | An entry's `destinationRollupId` is not in **that entry's own** `stateDeltas` — a narrower check than batch membership. This error is entry-only; a top-level lookup call's destination is validated separately by `LookupDestinationNotPinned`. |
+| `CallSourceNotVerified(uint256)` | An `l2ToL1Calls` entry's `sourceRollupId` is not in the host's verified rollup set (the entry's `stateDeltas`, or a top-level lookup's `expectedStateRoots` pins). MAINNET (L1) is never verified, so an L1-sourced call is always rejected here. |
+| `ReentrantDestinationNotVerified(uint256)` | A reentrant `expectedL1ToL2Calls` entry's (or nested lookup's) `destinationRollupId` is not in the host's verified rollup set. MAINNET (L1) is never a valid cross-chain destination. |
 | `ExpectedStateRootsNotStrictlyIncreasing(uint256)` | A top-level lookup call's `expectedStateRoots` pins are not strictly increasing by `rollupId` — same rationale as `StateDeltasNotStrictlyIncreasing`. |
+| `LookupDestinationNotPinned(uint256)` | A top-level lookup call's `destinationRollupId` is not among its own `expectedStateRoots` pins. |
 | `TransientCountExceedsEntries` | `transientExecutionEntryCount > entries.length`. |
 | `TransientLookupCallCountExceedsLookupCalls` | `transientLookupCallCount > l1ToL2lookupCalls.length`. |
 | `TransientLookupCallsWithoutTransientEntries` | `transientLookupCallCount != 0` while `transientExecutionEntryCount == 0` — transient lookups are only reachable while transient entries are mid-flight, so this shape is rejected outright. |
-| `RollupNotInBatch(uint256)` | A `StateDelta.rollupId` (within an entry) or an `ExpectedStateRootPerRollup.rollupId` (within a top-level lookup call's pins) is not in the batch's `rollupIdsWithProofSystems`. |
-| `EntryDestinationNotInStateDeltas(uint256)` | An entry's or lookup call's `destinationRollupId` is not in the batch's `rollupIdsWithProofSystems`. |
-| `LookupDestinationNotPinned(uint256)` | A top-level lookup call's `destinationRollupId` is not among its own `expectedStateRoots` pins. |
-| `CallSourceNotVerified(uint256)` | An `l2ToL1Calls` entry's `sourceRollupId` is not in the host's verified rollup set (the entry's `stateDeltas`, or a top-level lookup's `expectedStateRoots` pins). MAINNET (L1) is never verified, so an L1-sourced call is always rejected here. |
-| `ReentrantDestinationNotVerified(uint256)` | A reentrant `expectedL1ToL2Calls` entry's (or nested lookup's) `destinationRollupId` is not in the host's verified rollup set. MAINNET (L1) is never a valid cross-chain destination. |
 | `InvalidProof` | At least one proof system's `verify(proof, publicInputsHash)` returned false. |
 | `ThresholdNotMet(uint256 submitted, uint256 required)` (from `Rollup`) | A rollup's manager rejected the proof-system subset because `submitted` (the subset length) is below `required` (the rollup's configured threshold). |
 | `StateRootMismatch(uint256)`, `RollingHashMismatch`, `UnconsumedL2ToL1Calls`, `UnconsumedL1ToL2Calls`, `EtherDeltaMismatch`, `InsufficientRollupBalance`, `ExecutionNotFound` | **Not** raised by the immediate-entry drain (`attemptApplyImmediate`) — those failures are caught internally and surface as `ImmediateEntrySkipped` instead, never reverting the batch. These can only revert `postAndVerifyBatch` itself if the meta hook drives a queued entry via a nested `executeCrossChainCall` / `executeL2TX` call that fails and the caller's own `executeMetaCrossChainTransactions()` doesn't catch it — see those functions' error tables for exactly when each condition fires. |
+
+</details>
+
+<details>
+<summary>attemptApplyImmediate — Self-call wrapper for one immediate entry</summary>
+
+`attemptApplyImmediate` runs `_applyAndExecute` for a single transient entry in an isolated, revertible frame. `postAndVerifyBatch` step 5 dispatches each leading immediate entry (`proxyEntryHash == bytes32(0)`) through this self-call inside a `try`/`catch`: if the inner `_applyAndExecute` reverts, only that entry's state mutations roll back and the batch continues with the next entry (emitting `ImmediateEntrySkipped`). You should never call this directly — it is only reachable from `postAndVerifyBatch`'s own internal loop.
+
+**Who can call it:** Only the `EEZ` contract itself (`msg.sender == address(this)`), via the self-call in `postAndVerifyBatch` step 5.
+
+**Emits:** `L2ExecutionPerformed`, `EntryExecuted`, and (conditionally, via the shared `_processNCalls`/`_consumeNestedAction` path) `CallResult`, `RevertSpanExecuted`, `L1ToL2CallConsumed`, `L1ToL2CallNotFound`. On revert, none of these persist — the caller's `try`/`catch` in `postAndVerifyBatch` rolls back the frame and emits `ImmediateEntrySkipped` instead.
+
+```solidity
+function attemptApplyImmediate(uint256 transientIdx) public
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `transientIdx` | `uint256` | Index into `_transientExecutions` of the immediate entry to apply. |
+
+#### Errors
+
+| Error | Condition |
+| --- | --- |
+| `NotSelf` | `msg.sender` is not the `EEZ` contract itself. |
+| `ResidualEntryEtherIn` | `_entryEtherDelta` is non-zero on entry — immediate entries carry no inbound value, so a non-zero accumulator signals a corrupted execution context. |
+| `StateRootMismatch(uint256)`, `RollingHashMismatch`, `UnconsumedL2ToL1Calls`, `UnconsumedL1ToL2Calls`, `EtherDeltaMismatch`, `ExecutionNotFound` | Propagated from the inner `_applyAndExecute` call — see `executeCrossChainCall`'s error table above for exactly when each condition fires. Caught by `postAndVerifyBatch`'s `try`/`catch`, so these never revert the batch itself — they only trigger `ImmediateEntrySkipped`. |
 
 </details>
 
@@ -123,7 +154,7 @@ function postAndVerifyBatch(
 
 **Value:** Payable. The `msg.value` is tracked against the entry's `etherDelta` invariant.
 
-**Emits:** `CrossChainCallExecuted`, `ExecutionConsumed`, `EntryExecuted`, `L2ExecutionPerformed`
+**Emits:** `CrossChainCallExecuted`, `ExecutionConsumed`, `EntryExecuted`, `L2ExecutionPerformed`, and (conditionally, from the shared `_applyAndExecute`/`_processNCalls`/`_consumeNestedAction` path) `CallResult`, `RevertSpanExecuted`, `L1ToL2CallConsumed`, `L1ToL2CallNotFound`
 
 ```solidity
 function executeCrossChainCall(address sourceAddress, bytes calldata callData)
@@ -170,7 +201,7 @@ function executeCrossChainCall(address sourceAddress, bytes calldata callData)
 
 **Who can call it:** Anyone, as long as no execution is currently active.
 
-**Emits:** `L2TXExecuted(rollupId, executionQueueIndex)`, `ExecutionConsumed(crossChainCallHash, rollupId, executionQueueIndex)`, `L2ExecutionPerformed`, `EntryExecuted`
+**Emits:** `L2TXExecuted(rollupId, executionQueueIndex)`, `ExecutionConsumed(crossChainCallHash, rollupId, executionQueueIndex)`, `L2ExecutionPerformed`, `EntryExecuted`, and (conditionally, from the shared `_applyAndExecute`/`_processNCalls`/`_consumeNestedAction` path) `CallResult`, `RevertSpanExecuted`, `L1ToL2CallConsumed`, `L1ToL2CallNotFound`
 
 ```solidity
 function executeL2TX(uint256 rollupId) external returns (bytes memory result)
@@ -203,6 +234,32 @@ function executeL2TX(uint256 rollupId) external returns (bytes memory result)
 | `UnconsumedL1ToL2Calls` | Not all reentrant calls in `expectedL1ToL2Calls` were consumed. |
 | `EtherDeltaMismatch` | The net ETH flow doesn't match the declared `etherDelta`. |
 | `StaticCallWithValue` | A flat call flagged `isStatic` in the entry's `l2ToL1Calls` carries a non-zero `value`. A `STATICCALL` cannot transfer ETH, so this is rejected rather than silently dropped. |
+
+</details>
+
+<details>
+<summary>executeInContextAndRevert — Self-call wrapper for a revert span</summary>
+
+`executeInContextAndRevert` runs a `revertSpan` sub-run of calls (a group of calls the prover marked to always revert together, e.g. a failed `try`/`catch` branch on L2) in an isolated frame that itself always reverts. `_processNCalls` dispatches into it via a self-call whenever it hits a call flagged with a non-zero `revertSpan`, decodes the reverted `ContextResult` payload to recover the post-span rolling hash and cursor state, and folds that state back into the outer entry — `RevertSpanExecuted` is then emitted by `_processNCalls` in the caller's own frame, not by this function. You should never call this directly.
+
+**Who can call it:** Only the `EEZ` contract itself (`msg.sender == address(this)`), via the self-call in `_processNCalls`.
+
+```solidity
+function executeInContextAndRevert(uint256 callCount) external
+```
+
+#### Parameters
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `callCount` | `uint256` | Number of calls (the `revertSpan`) to process from the active flat `l2ToL1Calls` array before the forced revert. |
+
+#### Errors
+
+| Error | Condition |
+| --- | --- |
+| `NotSelf` | `msg.sender` is not the `EEZ` contract itself. |
+| `ContextResult(bytes32 rollingHash, uint256 reentrantConsumed, uint256 callsProcessed, bool callNotFound)` | Always reverted on the success path too — this is the function's only exit, not a failure signal. It carries the post-span rolling hash, reentrant-call cursor, flat-call cursor, and deferred no-match flag back to `_processNCalls`, which decodes it via `_decodeContextResult`. |
 
 </details>
 
