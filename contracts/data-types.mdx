@@ -275,7 +275,7 @@ struct RollupConfig {
 | Name | Type | Description |
 | --- | --- | --- |
 | `rollupContract` | `address` | The address of the `IRollupContract`-conforming manager for this rollup. Immutable after registration — there is no `setRollupContract` function. |
-| `stateRoot` | `bytes32` | The current committed state root for this rollup. Updated by `_applyStateDeltas` (during `executeCrossChainCall` / `executeL2Txs`) and by `setStateRoot` (owner escape hatch via the manager). |
+| `stateRoot` | `bytes32` | The current committed state root for this rollup. Updated by `_applyStateUpdates` (during `executeCrossChainCall` / `executeL2Txs`) and by `setStateRoot` (owner escape hatch via the manager). |
 | `etherBalance` | `uint256` | ETH held by the registry on behalf of this rollup. Adjusted by `etherDelta` in each `StateUpdate`. |
 
 ---
