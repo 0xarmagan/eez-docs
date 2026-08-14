@@ -28,9 +28,10 @@ interface IProofSystem {
     /// @notice Verifies a proof against a public inputs hash.
     /// @param proof   The proof bytes (encoding is proof-system-specific).
     /// @param publicInputsHash  A bytes32 commitment: a shared component over the batch's
-    ///                          entries, lookup calls, blobs, calldata, and each rollup's
-    ///                          L1-view context, mixed with a per-proof-system accumulator
-    ///                          over the vkeys that proof system attests to.
+    ///                          entries, static entries, blobs, calldata, each rollup's
+    ///                          L1-view context, and the submitter binding, mixed with a
+    ///                          per-proof-system accumulator over the vkeys that proof
+    ///                          system attests to.
     /// @return True if the proof is valid, reverts or returns false otherwise.
     function verify(bytes calldata proof, bytes32 publicInputsHash) external view returns (bool);
 }
@@ -84,7 +85,7 @@ EEZ iterates through `rollupIdsWithProofSystems[]` and calls each rollup's `chec
 
 ## The Public Inputs Hash
 
-EEZ binds every proof to the complete batch content by constructing a `publicInputsHash` that each proof must verify against. Conceptually, this hash captures two things: a **shared commitment** to everything in the batch (entry hashes, lookup calls, blob hashes, calldata, and each rollup's L1-view context), and a **per-proof-system commitment** to the verification keys that proof system attests to for each rollup it participates in. A proof generated for one set of vkeys cannot be reused with a different set.
+EEZ binds every proof to the complete batch content by constructing a `publicInputsHash` that each proof must verify against. Conceptually, this hash captures two things: a **shared commitment** to everything in the batch (entry hashes, static-entry hashes, blob hashes, calldata, each rollup's L1-view context, and the submitter binding), and a **per-proof-system commitment** to the verification keys that proof system attests to for each rollup it participates in. A proof generated for one set of vkeys cannot be reused with a different set.
 
 <details>
 <summary>For builders: exact two-stage publicInputsHash construction</summary>
@@ -92,20 +93,24 @@ EEZ binds every proof to the complete batch content by constructing a `publicInp
 **Stage 1 — shared across all proof systems:**
 
 ```text
-customDataAcc = bytes32(0)
 for each rollup r (ascending by rollupId):
-    customDataAcc = keccak256(abi.encode(customDataAcc, rollupId_r, customData_r))
+    customDataHashes[r] = keccak256(abi.encode(rollupId_r, customData_r))   // independent, no chaining
 
 sharedPublicInput = keccak256(abi.encodePacked(
-    abi.encode(entryHashes),         // keccak256(abi.encode(entry)) for each entry
-    abi.encode(lookupCallHashes),    // keccak256(abi.encode(lookup)) for each lookup call
-    abi.encode(blobHashes),          // EIP-4844 blob hashes
-    keccak256(callData),             // batch-scoped calldata
-    customDataAcc                    // folded per-rollup custom data
+    abi.encode(entryHashes),          // keccak256(abi.encode(entry)) for each entry
+    abi.encode(staticEntryHashes),    // keccak256(abi.encode(staticEntry)) for each StaticExecutionEntry
+    abi.encode(blobHashes),           // EIP-4844 blob hashes
+    keccak256(callData),              // batch-scoped calldata
+    abi.encode(customDataHashes),     // per-rollup custom-data hashes, folded as one array — not chained
+    batch.bindMsgSenderInPublicInput ? msg.sender : address(0)  // submitter binding (front-run protection)
 ))
 ```
 
+Each rollup's `customDataHashes[r]` is computed **independently** — `keccak256(abi.encode(rollupId_r, customData_r))`, with no accumulator carried from one rollup to the next. The full `customDataHashes[]` array is then folded into `sharedPublicInput` in one shot via `abi.encode(customDataHashes)`, the same pattern used for `entryHashes` and `staticEntryHashes`.
+
 `customData_r` is fetched from each rollup's manager via `getCustomData(batch.blockNumber)`. The reference implementation branches on `blockNumber`: `0` (no L1 context needed) returns an empty blob; `type(uint64).max` (latest context) returns `abi.encode(block.timestamp, blockhash(block.number - 1))` with a real, non-zero timestamp; any other specific block returns `abi.encode(uint256(0), blockHash)` — the timestamp is hardcoded to `0` (a past block's timestamp isn't recoverable on-chain, so it's read off-chain from the header instead), and the call reverts with `BlockHashUnavailable` if `blockhash` can't resolve that block (older than 256 blocks, or the current/future block).
+
+The final term, `batch.bindMsgSenderInPublicInput ? msg.sender : address(0)`, is a submitter-binding flag: when set, the batch's proof only verifies for the specific address that submits it, so a valid batch can't be front-run and replayed by a different caller. When unset, the term folds in `address(0)` for every submitter, leaving verification submitter-agnostic.
 
 **Stage 2 — per proof system:**
 
