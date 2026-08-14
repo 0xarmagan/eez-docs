@@ -25,11 +25,11 @@ The `WrappedToken` contract is the ERC-20 representation minted on destination c
 | Variable | Type | Description |
 |----------|------|-------------|
 | `manager` | `IEEZ` | The cross-chain manager contract ([`EEZ`](/contracts/eez) on L1, [`EEZL2`](/contracts/eezl2) on L2). Set by `initialize`. |
-| `rollupId` | `uint256` | This chain's rollup ID (`0` for L1 mainnet). Set by `initialize`. |
+| `rollupId` | `uint64` | This chain's rollup ID (`0` for L1 mainnet). Set by `initialize`. |
 | `admin` | `address` | The admin that can call `setCanonicalBridgeAddress`. Set by `initialize`. |
 | `canonicalBridgeAddress` | `address` | Optional override for the bridge's own address used in cross-chain proxy lookups. If unset (`address(0)`), `address(this)` is used. |
 | `wrappedTokens` | `mapping(bytes32 => address)` | Maps a `(originalToken, originalRollupId)` salt to the deployed `WrappedToken` address. |
-| `wrappedTokenInfo` | `mapping(address => TokenInfo)` | Reverse lookup from a `WrappedToken` address back to its `originalToken` and `originalRollupId`. Note: `TokenInfo.originalRollupId` is stored as `uint64` — the `uint256 originalRollupId` passed to `receiveTokens` is silently truncated via `uint64(originalRollupId)` when written here. |
+| `wrappedTokenInfo` | `mapping(address => TokenInfo)` | Reverse lookup from a `WrappedToken` address back to its `originalToken` and `originalRollupId` (both fields of `TokenInfo`, which stores `originalRollupId` as `uint64`). |
 
 ---
 
@@ -45,7 +45,7 @@ The `WrappedToken` contract is the ERC-20 representation minted on destination c
 **Emits:** Nothing. An `Initialized` event is declared on the contract but is **not** emitted by `initialize` in the current implementation — do not rely on it to detect setup.
 
 ```solidity
-function initialize(address _manager, uint256 _rollupId, address _admin) external
+function initialize(address _manager, uint64 _rollupId, address _admin) external
 ```
 
 #### Parameters
@@ -53,7 +53,7 @@ function initialize(address _manager, uint256 _rollupId, address _admin) externa
 | Name | Type | Description |
 | --- | --- | --- |
 | `_manager` | `address` | The address of the cross-chain manager contract on this chain — `EEZ` on L1, `EEZL2` on L2. The Bridge uses this to call `createCrossChainProxy`, `computeCrossChainProxyAddress`, and (indirectly) to route cross-chain calls. Must not be `address(0)`. |
-| `_rollupId` | `uint256` | This chain's rollup ID. Use `0` for L1 mainnet. This value is embedded in the calldata sent to the destination chain so the destination Bridge knows where the original token lives. |
+| `_rollupId` | `uint64` | This chain's rollup ID. Use `0` for L1 mainnet. This value is embedded in the calldata sent to the destination chain so the destination Bridge knows where the original token lives. |
 | `_admin` | `address` | The address permitted to call `setCanonicalBridgeAddress`. Must not be `address(0)`. |
 
 #### Errors
@@ -75,14 +75,14 @@ function initialize(address _manager, uint256 _rollupId, address _admin) externa
 **Emits:** `EtherBridged(sender, rollupId, amount)`
 
 ```solidity
-function bridgeEther(uint256 _rollupId, address destinationAddress) external payable
+function bridgeEther(uint64 _rollupId, address destinationAddress) external payable
 ```
 
 #### Parameters
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `_rollupId` | `uint256` | The destination rollup ID. The Bridge will route the ETH through the `CrossChainProxy` that represents `destinationAddress` on this rollup. A proxy is deployed via `createCrossChainProxy` if one does not already exist. |
+| `_rollupId` | `uint64` | The destination rollup ID. The Bridge will route the ETH through the `CrossChainProxy` that represents `destinationAddress` on this rollup. A proxy is deployed via `createCrossChainProxy` if one does not already exist. |
 | `destinationAddress` | `address` | The recipient address on the destination rollup. The Bridge looks up (or deploys) the `CrossChainProxy` that represents this address on the destination chain, then sends `msg.value` to it. |
 
 #### Errors
@@ -107,7 +107,7 @@ function bridgeEther(uint256 _rollupId, address destinationAddress) external pay
 function bridgeTokens(
     address token,
     uint256 amount,
-    uint256 _rollupId,
+    uint64 _rollupId,
     address destinationAddress
 ) external
 ```
@@ -118,7 +118,7 @@ function bridgeTokens(
 | --- | --- | --- |
 | `token` | `address` | The ERC-20 token to bridge. Can be a native token held on this chain (will be locked) or a `WrappedToken` minted by this Bridge for a foreign token (will be burned). Must not be `address(0)`. |
 | `amount` | `uint256` | The number of token units to bridge. Must be greater than zero. You must have approved the Bridge to spend at least this amount before calling. |
-| `_rollupId` | `uint256` | The destination rollup ID. Determines which rollup's Bridge contract will receive the `receiveTokens` call. |
+| `_rollupId` | `uint64` | The destination rollup ID. Determines which rollup's Bridge contract will receive the `receiveTokens` call. |
 | `destinationAddress` | `address` | The recipient address on the destination rollup. |
 
 #### Errors
@@ -143,13 +143,13 @@ function bridgeTokens(
 ```solidity
 function receiveTokens(
     address originalToken,
-    uint256 originalRollupId,
+    uint64 originalRollupId,
     address to,
     uint256 amount,
     string calldata name,
     string calldata symbol,
     uint8 tokenDecimals,
-    uint256 sourceRollupId
+    uint64 sourceRollupId
 ) external
 ```
 
@@ -158,13 +158,13 @@ function receiveTokens(
 | Name | Type | Description |
 | --- | --- | --- |
 | `originalToken` | `address` | The token address on the chain where it was originally issued. Used together with `originalRollupId` to compute the deterministic `WrappedToken` salt, or to identify the native token to release if `originalRollupId == rollupId`. |
-| `originalRollupId` | `uint256` | The rollup ID of the chain where the token was originally issued. If this equals this chain's `rollupId`, the token is native here and locked funds are released. Otherwise, a `WrappedToken` is deployed (first bridge) or looked up (subsequent bridges) and minted. |
+| `originalRollupId` | `uint64` | The rollup ID of the chain where the token was originally issued. If this equals this chain's `rollupId`, the token is native here and locked funds are released. Otherwise, a `WrappedToken` is deployed (first bridge) or looked up (subsequent bridges) and minted. |
 | `to` | `address` | The recipient address on this chain. |
 | `amount` | `uint256` | The number of token units to release or mint. |
 | `name` | `string` | The token name. Used only during the first bridge (when the `WrappedToken` has not yet been deployed). Subsequent bridges for the same token ignore this value. |
 | `symbol` | `string` | The token symbol. Used only during the first `WrappedToken` deployment. |
 | `tokenDecimals` | `uint8` | The token's decimal precision. Used only during the first `WrappedToken` deployment. |
-| `sourceRollupId` | `uint256` | The rollup ID from which this bridge call originated. Used to identify the expected `CrossChainProxy` caller — the Bridge validates that `msg.sender` is `manager.computeCrossChainProxyAddress(_bridgeAddress(), sourceRollupId)`. |
+| `sourceRollupId` | `uint64` | The rollup ID from which this bridge call originated. Used to identify the expected `CrossChainProxy` caller — the Bridge validates that `msg.sender` is `manager.computeCrossChainProxyAddress(_bridgeAddress(), sourceRollupId)`. |
 
 #### Errors
 
@@ -182,7 +182,7 @@ function receiveTokens(
 **Who can call it:** Anyone.
 
 ```solidity
-function getWrappedToken(address originalToken, uint256 originalRollupId)
+function getWrappedToken(address originalToken, uint64 originalRollupId)
     external
     view
     returns (address)
@@ -193,7 +193,7 @@ function getWrappedToken(address originalToken, uint256 originalRollupId)
 | Name | Type | Description |
 | --- | --- | --- |
 | `originalToken` | `address` | The token address on the chain where it was originally issued. |
-| `originalRollupId` | `uint256` | The rollup ID where the token was originally issued. |
+| `originalRollupId` | `uint64` | The rollup ID where the token was originally issued. |
 
 #### Returns
 
