@@ -21,7 +21,7 @@ When a transaction on L1 triggers cross-chain calls to an L2 (or vice versa), th
 - **Matches cross-chain boundaries** by correlating `CrossChainCallExecuted` and `IncomingCrossChainCallExecuted` events.
 - **Renders a unified tree** showing L1 and L2 execution interleaved at the `executeCrossChainCall` call sites.
 
-The decoder also performs three-tier ABI resolution for decoding function calls: local compiled artifacts (from `out/`), Blockscout APIs, and 4byte.directory. The L1 (`EEZ`) and L2 (`EEZL2`) contract addresses can be pinned via the `ROLLUPS` and `MANAGER_L2` environment variables.
+The decoder resolves ABIs for decoding function calls in two tiers: an exact selector match against local compiled artifacts (from `out/`, extended with any ABI fetched from a Blockscout-compatible explorer during label discovery), then a brute-force fallback that tries every loaded interface if the exact match misses. (A 4byte.directory lookup helper exists in the code but is not currently wired into function-call or log decoding.) The L1 (`EEZ`) and L2 (`EEZL2`) contract addresses can be pinned via the `ROLLUPS` and `MANAGER_L2` environment variables.
 
 ## Prerequisites
 
@@ -81,14 +81,14 @@ node decode-trace.mjs \
 
 | Flag | Description |
 |---|---|
-| `--l1-explorer <URL>` | Blockscout-compatible L1 explorer for ABI + contract name lookup |
-| `--l2-explorer <URL>` | Blockscout-compatible L2 explorer |
-| `--no-explorer` | Disable all Blockscout API calls (useful for private networks) |
+| `--l1-explorer <URL>` | Blockscout-compatible L1 explorer for ABI + contract name lookup. Defaults to the placeholder host `https://l1.eez.dev` if omitted — pass `--no-explorer` to skip explorer lookups entirely instead of relying on this default. |
+| `--l2-explorer <URL>` | Blockscout-compatible L2 explorer. Defaults to the placeholder host `https://l2.eez.dev` if omitted — same caveat as above. |
+| `--no-explorer` | Disable all Blockscout API calls (useful for private networks, or to avoid the default placeholder hosts above) |
 | `--json` | Emit the unified execution tree as structured JSON instead of the box-drawing diagram |
 
 ### Examples
 
-Decode an L1 transaction with explorer-based labeling:
+Decode an L1 transaction with explorer-based labeling. Without `--l1-explorer`/`--l2-explorer`, the decoder defaults to the placeholder hosts `https://l1.eez.dev` and `https://l2.eez.dev` (see below) and will attempt Blockscout API calls against them unless `--no-explorer` is passed:
 
 ```bash
 node decode-trace.mjs \
