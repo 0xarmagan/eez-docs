@@ -10,7 +10,7 @@ description: "Reference for IRollupContract — the per-rollup interface for pro
 
 ```solidity
 interface IRollupContract {
-    function rollupContractRegistered(uint256 rollupId) external;
+    function rollupContractRegistered(uint64 rollupId) external;
 
     function checkProofSystemsAndGetVkeys(address[] calldata proofSystems)
         external
@@ -29,7 +29,7 @@ interface IRollupContract {
 ## `rollupContractRegistered`
 
 ```solidity
-function rollupContractRegistered(uint256 rollupId) external
+function rollupContractRegistered(uint64 rollupId) external
 ```
 
 A one-shot callback fired by the EEZ registry immediately after `EEZ.registerRollup` writes the `rollupContract` pointer. This is the only way your manager learns its assigned `rollupId` — the registry does not expose a reverse lookup from contract address to rollup ID.
@@ -40,7 +40,7 @@ You must store the `rollupId` value so that future calls from this contract back
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `rollupId` | `uint256` | The [`rollupId`](/reference/glossary#rollupid) assigned by the registry. Store this value — it is the key into `rollups[rollupId]` in the central registry. |
+| `rollupId` | `uint64` | The [`rollupId`](/reference/glossary#rollupid) assigned by the registry. Store this value — it is the key into `rollups[rollupId]` in the central registry. |
 
 **When EEZ calls this:** Once, during `EEZ.registerRollup`, synchronously before that function returns.
 
@@ -51,7 +51,7 @@ You must store the `rollupId` value so that future calls from this contract back
 - Persist `rollupId` in storage.
 
 ```solidity
-function rollupContractRegistered(uint256 _rollupId) external {
+function rollupContractRegistered(uint64 _rollupId) external {
     if (msg.sender != ROLLUPS) revert NotEEZRegistry();
     if (rollupId != 0) revert AlreadyRegistered();
     rollupId = _rollupId;
@@ -138,7 +138,7 @@ The contents are entirely rollup-defined. Your circuit determines what L1-view i
 | --- | --- | --- |
 | `customData` | `bytes` | The opaque blob your rollup commits to. The registry folds it into `customDataAcc` keyed by this rollup's ID before building `sharedPublicInput`. Return an empty bytes value (`""`) when `blockNumber == 0`. |
 
-**When EEZ calls this:** During `postAndVerifyBatch`, in step 2 (verify), after fetching the vkMatrix but as part of building `sharedPublicInput`. Called once per rollup per batch, passing `batch.blockNumber`.
+**When EEZ calls this:** During `postAndVerifyBatch`, in step 3 (verify), after fetching the vkMatrix in step 2 but as part of building `sharedPublicInput`. Called once per rollup per batch, passing `batch.blockNumber`.
 
 **What your implementation must do:**
 
@@ -206,7 +206,7 @@ Rollup rollup = new Rollup(
 
 // 2. Register with the central registry
 // This fires rollupContractRegistered(rollupId) on the manager.
-uint256 rollupId = eez.registerRollup(address(rollup), initialStateRoot);
+uint64 rollupId = eez.registerRollup(address(rollup), initialStateRoot);
 ```
 
 After step 2, `rollup.rollupId()` returns the assigned ID and the manager is ready to participate in batches.
