@@ -99,7 +99,7 @@ L2_OUTPUT=$(forge script script/e2e/shared/DeployInfra.s.sol:DeployManagerL2 \
   --rpc-url $L2_RPC \
   --broadcast \
   --private-key $PK \
-  --sig "run(uint256,address)" 1 $DEPLOYER 2>&1)
+  --sig "run(uint64,address)" 1 $DEPLOYER 2>&1)
 
 echo "$L2_OUTPUT"
 export MANAGER_L2=$(echo "$L2_OUTPUT" | grep "MANAGER_L2=" | sed 's/.*MANAGER_L2=//' | awk '{print $1}')
@@ -137,7 +137,7 @@ Rollup manager = new Rollup(
 Then register the manager with the EEZ registry. The call is permissionless — anyone can register a new rollup:
 
 ```solidity
-uint256 rollupId = eez.registerRollup(address(manager), initialStateRoot);
+uint64 rollupId = eez.registerRollup(address(manager), initialStateRoot);
 // rollupId == 1 for the first registered rollup
 ```
 
@@ -146,11 +146,15 @@ EEZ calls `manager.rollupContractRegistered(rollupId)` as a one-shot init callba
 Verify the registration on-chain:
 
 ```bash
-cast call $ROLLUPS "rollups(uint256)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
+cast call $ROLLUPS "rollups(uint64)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
 # Returns: (managerAddress, stateRoot, etherBalance)
 # e.g.    (0x5FbDB...,     0xabcd...,    0)
 # stateRoot is mutable going forward — it just still equals the initial value here.
 ```
+
+:::warning Stale example — pending rewrite
+Steps 4–6 below, and the "What just happened?" recap, walk through the deleted `HelloWorld` scenario. The `HelloWorldL1`/`HelloWorldL2` contracts and the `script/e2e/helloWorld/` scripts referenced here no longer exist in `eez-core-protocol` — this content needs a full rewrite around the current `Counter` example (`script/e2e/one_way/L1_to_L2/counter/E2ECounter.s.sol`). Struct/function names below have been corrected where they could be verified against current source, but treat the commands, contract names, and outputs in this block as unverified until the rewrite lands.
+:::
 
 ## Step 4 — Deploy the Hello World contracts
 
@@ -189,7 +193,7 @@ echo "HelloWorldL1: $HELLO_WORLD_L1"
 
 The `Execute` script constructs the `ProofSystemBatchPerVerificationEntries` struct, posts it on L1, and immediately calls `HelloWorldL1.helloL2World()` to consume the entry. The batch contains one execution entry for rollup ID 1 with:
 
-- A `StateDelta` that advances the L2 state root from `keccak256("l2-initial-state")` to `keccak256("l2-state-after-helloworld")`
+- A `StateUpdate` that advances the L2 state root from `keccak256("l2-initial-state")` to `keccak256("l2-state-after-helloworld")`
 - A `proxyEntryHash` committing to the exact cross-chain call hash
 - `returnData: abi.encode("World")` — the pre-committed return value
 - `rollingHash: bytes32(0)` — zero because this entry makes no outbound calls on L1
@@ -251,7 +255,7 @@ The E2E script pre-computed the full execution trace: what calls to make on L2, 
 
 ### On-chain proof verification
 
-`postAndVerifyBatch` verified the proof from `AcceptAllProofSystem`, confirmed the public inputs hash covered every entry and lookup call, marked rollup ID 1 as verified for the current block, and published the execution entry into the persistent per-rollup execution queue (keyed by destination rollup ID).
+`postAndVerifyBatch` verified the proof from `AcceptAllProofSystem`, confirmed the public inputs hash covered every entry and static entry, marked rollup ID 1 as verified for the current block, and published the execution entry into the persistent per-rollup execution queue (keyed by destination rollup ID).
 
 ### Cross-chain call execution
 
