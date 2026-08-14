@@ -30,7 +30,7 @@ Your implementation should call the cross-chain proxies whose entries are in the
 
 If your implementation reverts, the entire `postAndVerifyBatch` call reverts with it. Design your hook to be robust or wrap individual proxy calls in `try/catch` when partial failures are acceptable.
 
-**When EEZ calls this:** Step 7 of `postAndVerifyBatch`, after:
+**When EEZ calls this:** Step 6 of `postAndVerifyBatch`, after:
 1. Proof verification.
 2. Per-rollup queue wipe and `lastVerifiedBlock` update.
 3. Transient table population.
@@ -46,11 +46,11 @@ The typical pattern is to implement `IMetaCrossChainReceiver` on the contract th
 
 ```solidity
 contract MyOrchestrator is IMetaCrossChainReceiver {
-    IEEZ public immutable eez;
+    EEZ public immutable eez;
     address public immutable proxyForContractOnL2;
 
     constructor(address _eez, address _proxy) {
-        eez = IEEZ(_eez);
+        eez = EEZ(_eez);
         proxyForContractOnL2 = _proxy;
     }
 
@@ -115,7 +115,7 @@ contract FlashLoanBridgeExecutor is IMetaCrossChainReceiver {
     ) external {
         // The batch's transient entry contains the repayment call.
         // executeMetaCrossChainTransactions is our repayment hook.
-        IEEZ(eez).postAndVerifyBatch(batch);
+        EEZ(eez).postAndVerifyBatch(batch);
     }
 
     function executeMetaCrossChainTransactions() external {
