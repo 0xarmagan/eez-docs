@@ -21,7 +21,7 @@ You do not have to use this reference implementation. Any contract that satisfie
 | Variable | Type | Description |
 | --- | --- | --- |
 | `ROLLUPS` | `address` (immutable) | The central `EEZ` registry this rollup is registered with. Set in the constructor; never changes. |
-| `rollupId` | `uint256` | The ID assigned to this rollup by the registry. Written exactly once via the `rollupContractRegistered` callback; `0` means not yet registered. |
+| `rollupId` | `uint64` | The ID assigned to this rollup by the registry. Written exactly once via the `rollupContractRegistered` callback; `0` means not yet registered. |
 | `threshold` | `uint256` | Minimum number of proof systems that must attest per batch. Enforced inside `checkProofSystemsAndGetVkeys`. |
 | `verificationKey(address)` | `mapping(address => bytes32)` | Per-proof-system verification key. A value of `bytes32(0)` means the proof system is not allowed for this rollup. |
 
@@ -70,14 +70,14 @@ constructor(
 **Who can call it:** Only `ROLLUPS` (the `EEZ` registry). Calling from any other address reverts.
 
 ```solidity
-function rollupContractRegistered(uint256 _rollupId) external
+function rollupContractRegistered(uint64 _rollupId) external
 ```
 
 #### Parameters
 
 | Name | Type | Description |
 | --- | --- | --- |
-| `rollupId` | `uint256` | The rollup ID assigned by the registry. IDs start at `1` (`0` is reserved for mainnet). This value is stored in the public `rollupId` state variable and must be passed back to `EEZ.setStateRoot` in any future escape-hatch calls. |
+| `rollupId` | `uint64` | The rollup ID assigned by the registry. IDs start at `1` (`0` is reserved for mainnet). This value is stored in the public `rollupId` state variable and must be passed back to `EEZ.setStateRoot` in any future escape-hatch calls. |
 
 #### Errors
 
@@ -180,7 +180,7 @@ function setStateRoot(bytes32 newStateRoot) external onlyOwner
 | `OwnableUnauthorizedAccount` | `msg.sender` is not the current owner. |
 | `NotRollupContract` (from EEZ) | This contract is no longer the registered manager for its `rollupId` — should not happen in normal operation. |
 | `SetStateRootNotAllowedDuringExecution` (from EEZ) | A cross-chain execution is currently active. |
-| `RollupBatchActiveThisBlock(uint256)` (from EEZ) | A `postAndVerifyBatch` has already verified this rollup in the current block. Wait until the next block. |
+| `RollupBatchActiveThisBlock(uint64)` (from EEZ) | A `postAndVerifyBatch` has already verified this rollup in the current block. Wait until the next block. |
 
 </details>
 
