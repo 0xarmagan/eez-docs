@@ -138,14 +138,18 @@ contract ECDSAProofSystem is IProofSystem {
 }
 ```
 
-The reference `ECDSAProofSystem.sol` in the EEZ repository (`src/proofSystems/ECDSAProofSystem.sol`) is intentionally **simpler** than the multisig example above — treat that example as an illustrative pattern for when you actually need threshold signatures, not a description of the reference. The reference is a **single-signer** verifier (one `address signer`, no `threshold` and no signature loop) that recovers directly against the **raw `bytes32 publicInputsHash`** with **no** EIP-191 `"\x19Ethereum Signed Message"` prefix:
+The reference `ECDSAProofSystem.sol` in the EEZ repository (`src/proofSystems/ECDSAProofSystem.sol`) is intentionally **simpler** than the multisig example above — treat that example as an illustrative pattern for when you actually need threshold signatures, not a description of the reference. The reference is a **single-signer** verifier (one `address signer`, no `threshold` and no signature loop) that recovers directly against the **raw `bytes32 publicInputsHash`** with **no** EIP-191 `"\x19Ethereum Signed Message"` prefix. It also inherits OpenZeppelin `Ownable` and exposes an owner-only `setSigner` so the signer can be rotated without redeploying:
 
 ```solidity
-contract ECDSAProofSystem is IProofSystem {
-    address public immutable signer;
+contract ECDSAProofSystem is IProofSystem, Ownable {
+    address public signer;
 
-    constructor(address _signer) {
-        signer = _signer;
+    constructor(address initialOwner, address initialSigner) Ownable(initialOwner) {
+        signer = initialSigner;
+    }
+
+    function setSigner(address newSigner) external onlyOwner {
+        signer = newSigner;
     }
 
     function verify(
@@ -158,6 +162,8 @@ contract ECDSAProofSystem is IProofSystem {
     }
 }
 ```
+
+Note that `signer` is mutable (not `immutable`) precisely because `setSigner` needs to be able to rotate it — the owner can point verification at a new signer key at any time.
 
 If you follow the multisig example instead, remember its EIP-191-prefixed digest is **incompatible** with the reference: a signature made over the prefixed hash will not recover against the raw `publicInputsHash`.
 
