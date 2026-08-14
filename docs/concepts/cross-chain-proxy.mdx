@@ -1,7 +1,7 @@
 ---
 title: "CrossChainProxy: Deterministic Cross-Rollup Identity"
 sidebar_label: "Cross-Chain Proxy"
-description: "Learn how EEZ's CREATE2 CrossChainProxy preserves msg.sender identity across rollups, routes calls to execution or lookup, and detects STATICCALL context."
+description: "Learn how EEZ's CREATE2 CrossChainProxy preserves msg.sender identity across rollups, routes calls to execution or a static read, and detects STATICCALL context."
 ---
 
 import UnauditedWarning from '../_unaudited-warning.mdx'
@@ -22,7 +22,7 @@ The EEZ manager auto-creates a proxy the first time it encounters a new `(addres
 <details>
 <summary>For builders: where auto-creation happens internally</summary>
 
-`_processNCalls` calls `_createCrossChainProxyInternal` when `authorizedProxies[sourceProxy].originalAddress == address(0)` — i.e. the proxy has no registry entry yet, not a `code.length` check.
+`_processNCalls` calls `_createCrossChainProxyInternal` when `!authorizedProxies[sourceProxy].isProxy` — i.e. the registry's existence flag for that proxy address is still unset, not a `code.length` check or an `originalAddress == address(0)` check.
 
 </details>
 
@@ -34,45 +34,41 @@ The proxy gives each remote identity its own Ethereum address on the local chain
 
 ## Deterministic Address Computation
 
-The proxy address is a `CREATE2` hash of three ingredients: the `(originalRollupId, originalAddress)` pair (as the salt), the `CrossChainProxy` creation code, and its constructor arguments — the manager address, the original address, and the original rollup ID — all baked into the bytecode hash. Any contract can compute the address offline without a registry lookup — just call `computeCrossChainProxyAddress(originalAddress, originalRollupId)` on the manager.
+The proxy address is a `CREATE2` hash of two ingredients, baked in at two different places. The `(originalRollupId, originalAddress)` pair is the CREATE2 **salt** — it's never part of the deployed bytecode. The **bytecode hash** is just `CrossChainProxy`'s creation code plus its single constructor argument, the manager address (`address(this)`). The remote identity a proxy represents isn't stored on the proxy contract at all — every `CrossChainProxy` deployed by the same manager has identical bytecode; the manager's `authorizedProxies` registry ([`ProxyInfo`](/contracts/data-types#proxyinfo): `isProxy`, `originalAddress`, `originalRollupId`) is the only place that binds a proxy address back to the `(address, rollupId)` pair it stands in for.
 
-Two properties follow. The address is **fully deterministic**: you can pre-compute and hard-code it before the proxy has ever been deployed. It is also **manager-scoped**: the same `(originalAddress, originalRollupId)` pair on two different manager deployments (or on L1 vs. L2) produces two different proxy addresses, so proxies from different EEZ deployments can never be confused.
+Any contract can compute the address offline without a registry lookup — just call `computeCrossChainProxyAddress(originalAddress, originalRollupId)` on the manager.
+
+Two properties follow. The address is **fully deterministic**: you can pre-compute and hard-code it before the proxy has ever been deployed. It is also **manager-scoped**: the same `(originalAddress, originalRollupId)` pair on two different manager deployments (or on L1 vs. L2) produces two different proxy addresses (the bytecode hash differs by `address(this)`), so proxies from different EEZ deployments can never be confused.
 
 <details>
 <summary>For builders: exact CREATE2 formula</summary>
 
 ```solidity
 // From src/base/EEZBase.sol
-function computeCrossChainProxyAddress(
-    address originalAddress,
-    uint256 originalRollupId
-) public view returns (address) {
+function computeCrossChainProxyAddress(address originalAddress, uint64 originalRollupId)
+    public
+    view
+    returns (address)
+{
     bytes32 salt = keccak256(abi.encodePacked(originalRollupId, originalAddress));
-    bytes32 bytecodeHash = keccak256(
-        abi.encodePacked(
-            type(CrossChainProxy).creationCode,
-            abi.encode(address(this), originalAddress, originalRollupId)
-        )
-    );
-    return address(uint160(uint256(keccak256(abi.encodePacked(
-        bytes1(0xff),
-        address(this),   // deployer = the EEZ manager
-        salt,
-        bytecodeHash
-    )))));
+    bytes32 bytecodeHash =
+        keccak256(abi.encodePacked(type(CrossChainProxy).creationCode, abi.encode(address(this))));
+    return address(uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(this), salt, bytecodeHash)))));
 }
 ```
 
-The `CREATE2` salt does not include `block.chainid`. The same `(originalAddress, originalRollupId)` pair produces the same address on any EEZ manager sharing the same bytecode. See [EEZ](/contracts/eez#computecrosschainproxyaddress) for the on-chain view function.
+Only the manager address is baked into the bytecode hash — `originalAddress` and `originalRollupId` feed the salt only, never the constructor. This is why the identity check on every proxy call has to go through `authorizedProxies[proxy]` rather than reading state off the proxy itself: the proxy's own bytecode carries no trace of which remote identity it represents.
+
+The `CREATE2` salt does not include `block.chainid`. The same `(originalAddress, originalRollupId)` pair produces the same salt on any EEZ manager; the address still differs across managers because the bytecode hash folds in `address(this)`. See [EEZ](/contracts/eez#computecrosschainproxyaddress) for the on-chain view function.
 
 </details>
 
-## Call Routing: Execute vs. Lookup
+## Call Routing: Execute vs. Static Read
 
 When a contract calls a proxy (directly or through its `fallback` function), the proxy has to decide between two paths:
 
-- **Execute path** — used when the caller expects the cross-chain call to run and produce state changes. EEZ locates the matching [`ExecutionEntry`](/reference/glossary#executionentry) in the queue, runs the flat call array, verifies the [rolling hash](/reference/glossary#rollinghash), applies state deltas, and returns the pre-computed return data.
-- **Lookup path** — used when the caller is in a read-only context (e.g., a Solidity `view` function). EEZ looks up the pre-recorded result in the `expectedLookups` table (if inside an execution) or the lookup pool (if outside), verifies the lookup's sub-call hash, and returns the cached result. No state changes occur.
+- **Execute path** — used when the caller expects the cross-chain call to run and produce state changes. The proxy routes to `executeCrossChainCall`, which locates the matching [`ExecutionEntry`](/reference/glossary#executionentry) (or, if fired mid-execution, the matching row of the unified reentrant table), runs its own call array, verifies the [rolling hash](/reference/glossary#rollinghash), applies state updates, and returns the entry's pre-computed return data — or reverts with it, if the entry's `success` flag is `false`.
+- **Static-read path** — used when the caller is in a read-only context (e.g., a Solidity `view` function). The proxy routes to `staticCrossChainCall` instead, which resolves the read from the same content-addressed machinery: a STATIC-kind row of the unified reentrant table when fired inside an execution, or a top-level `StaticExecutionEntry` from the pool when fired outside one. Either way, resolution runs the entry's read-only sub-calls via `STATICCALL` and returns (or reverts with) the cached result — no state changes occur. See [Static Entries](/guides/lookup-calls) for the full two-homes model.
 
 The decision hinges on whether the current EVM frame is inside a `STATICCALL`. Since Solidity has no built-in way to introspect that, the proxy uses a clever detection trick described below.
 
@@ -81,7 +77,7 @@ Routing at a glance:
 <DiagramMotion
   src="/motion/tstore-probe.webm"
   poster="/motion/tstore-probe-poster.png"
-  alt="CrossChainProxy tstore probe: a regular CALL routes to the execute path and applies state deltas; a STATICCALL routes to the read-only lookup path with no state changes."
+  alt="CrossChainProxy tstore probe: a regular CALL routes to executeCrossChainCall and applies state updates; a STATICCALL routes to the read-only staticCrossChainCall path with no state changes."
   caption="How the proxy tells a STATICCALL from a regular CALL via a tstore probe."
 />
 
@@ -89,12 +85,12 @@ Routing at a glance:
 
 The proxy needs to know whether it is being called in a `STATICCALL` context so it can pick the right route. Solidity offers no direct primitive for this, so `CrossChainProxy` uses an **EIP-1153 transient-storage probe**:
 
-1. The proxy makes a plain `CALL` to itself, targeting a helper function that attempts a single `tstore`.
+1. The proxy makes a plain `CALL` to itself, capped at a small fixed gas stipend (`STATIC_CHECK_GAS = 1,000`), targeting a helper function (`staticCheck`) that attempts a single `tstore`.
 2. `STATICCALL` restrictions propagate down the entire call stack — every frame invoked from inside a static context inherits the ban on state writes, even when reached via a regular `CALL`. EIP-1153 transient writes are treated as state writes for this purpose.
-3. If the outer context was a normal `CALL`, the `tstore` succeeds → route to the execute path.
-4. If the outer context was a `STATICCALL`, the inner `tstore` reverts → route to the lookup path.
+3. If the outer context was a normal `CALL`, the `tstore` succeeds → route to `executeCrossChainCall`.
+4. If the outer context was a `STATICCALL`, the inner `tstore` reverts → route to `staticCrossChainCall`.
 
-The probe is cheap (transient storage, no persistent `SSTORE`), non-destructive (the value written is discarded), and doesn't require any special opcode support beyond EIP-1153.
+The probe is cheap (transient storage, no persistent `SSTORE`), non-destructive (the value written is discarded), and doesn't require any special opcode support beyond EIP-1153. The gas cap on step 1 matters: inside an actual `STATICCALL`, the `tstore` attempt is an exceptional halt that consumes *all* gas forwarded to that frame, so capping the forward keeps a failing probe cheap instead of draining gas from the outer call — the mutable path only needs about 300 gas to succeed.
 
 <details>
 <summary>For builders: exact routing implementation</summary>
@@ -103,16 +99,16 @@ Both the fallback router and the `tstore` probe live in `src/base/CrossChainProx
 
 ```solidity
 function _fallback() internal {
-    (bool success,) = address(this).call(abi.encodeCall(this.staticCheck, ()));
+    (bool success,) = address(this).call{gas: STATIC_CHECK_GAS}(abi.encodeCall(this.staticCheck, ()));
     bytes memory result;
 
     if (!success) {
-        // STATICCALL context — resolve via the view function
+        // Static context — look up pre-computed result via view function
         (success, result) = EEZ.staticcall(
-            abi.encodeCall(IEEZ.staticCallLookup, (msg.sender, msg.data))
+            abi.encodeCall(IEEZ.staticCrossChainCall, (msg.sender, msg.data))
         );
     } else {
-        // Normal CALL context — execute the cross-chain call
+        // Normal context — execute cross-chain call
         (success, result) = EEZ.call{value: msg.value}(
             abi.encodeCall(IEEZ.executeCrossChainCall, (msg.sender, msg.data))
         );
@@ -133,14 +129,16 @@ function staticCheck() external {
 }
 ```
 
-Both `executeCrossChainCall` and `staticCallLookup` return `bytes memory`; the low-level `.call()` re-encodes that as ABI, so the proxy strips one layer with `abi.decode(result, (bytes))` before returning to the original caller.
+Both `executeCrossChainCall` and `staticCrossChainCall` return `bytes memory`; the low-level `.call()` re-encodes that as ABI, so the proxy strips one layer with `abi.decode(result, (bytes))` before returning to the original caller.
 
-The proxy also implements the OpenZeppelin `TransparentProxy` pattern on `executeOnBehalf`: when `msg.sender == EEZ` (the manager driving execution), the call is forwarded directly to the destination with assembly-level `return`/`revert` so that the destination's return data reaches the manager byte-for-byte unmodified — this is what keeps the rolling hash's `CALL_END` tag consistent between simulation and on-chain replay:
+The proxy also implements the OpenZeppelin `TransparentProxy` pattern on `executeOnBehalf`: when `msg.sender == EEZ` (the manager driving execution), the call is forwarded directly to the destination with assembly-level `return`/`revert` so that the destination's return data reaches the manager byte-for-byte unmodified — this is what keeps the rolling hash's `CALL_END` tag consistent between simulation and on-chain replay. `executeOnBehalf` takes an explicit `callGas` limit for the destination call — `0` forwards all remaining gas, any other value forwards exactly that much:
 
 ```solidity
-function executeOnBehalf(address destination, bytes calldata data) external payable {
+function executeOnBehalf(address destination, uint64 callGas, bytes calldata data) external payable {
     if (msg.sender == EEZ) {
-        (bool success, bytes memory result) = destination.call{value: msg.value}(data);
+        (bool success, bytes memory result) = callGas == 0
+            ? destination.call{value: msg.value}(data)               // forward all remaining gas
+            : destination.call{value: msg.value, gas: callGas}(data); // forward exactly callGas
         assembly {
             switch success
             case 0 { revert(add(result, 0x20), mload(result)) }
@@ -166,7 +164,7 @@ address proxy = eez.createCrossChainProxy(0xAlice, 2);
 address predicted = eez.computeCrossChainProxyAddress(0xAlice, 2);
 ```
 
-EEZ auto-creates proxies during execution: for each call, the manager checks whether `authorizedProxies[sourceProxy]` already has a registered `originalAddress` and deploys the proxy if that registry entry is still empty. For lookup sub-calls processed in a static context, however, proxies must already exist — deploying a contract is a state-mutating operation and cannot happen inside a `STATICCALL`. There, the manager instead checks the proxy address's `code.length`; if it's `0`, the batch reverts with `LookupCallProxyNotDeployed` rather than deploying on the fly.
+EEZ auto-creates proxies during execution: for each call, the manager checks the registry's `authorizedProxies[sourceProxy].isProxy` flag and deploys the proxy if it's still unset. For static sub-calls resolved in a `STATICCALL` context, however, proxies must already exist — deploying a contract is a state-mutating operation and cannot happen inside a `STATICCALL`. There, the manager instead checks the proxy address's `code.length`; if it's `0`, resolution reverts with `StaticCallProxyNotDeployed` rather than deploying on the fly.
 
 :::note
 A proxy always represents a **remote** identity. Creating a proxy for an address on the manager's own chain — `originalRollupId == 0` (`MAINNET_ROLLUP_ID`) on L1, or `originalRollupId == ROLLUP_ID` on L2 — reverts. See the [glossary](/reference/glossary#rollupid) for the `rollupId` numbering rules.
