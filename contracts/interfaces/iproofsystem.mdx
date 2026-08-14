@@ -52,21 +52,25 @@ The EEZ registry builds `publicInputsHash` in two stages before calling `verify`
 **Stage 1 — Shared public input across all proof systems in the batch:**
 
 ```
-customDataAcc = bytes32(0)
 for each rollup r in the batch (rollupId-ascending):
     customData_r = IRollupContract(rollupContract_r).getCustomData(batch.blockNumber)
-    customDataAcc = keccak256(abi.encode(customDataAcc, rollupId_r, customData_r))
+    customDataHashes[r] = keccak256(abi.encode(rollupId_r, customData_r))   // independent per rollup — NOT chained
+
+boundSender = batch.bindMsgSenderInPublicInput ? msg.sender : address(0)   // front-run protection
 
 sharedPublicInput = keccak256(abi.encodePacked(
     abi.encode(entryHashes),          // keccak256(abi.encode(entry)) per entry
-    abi.encode(lookupCallHashes),     // keccak256(abi.encode(lookupCall)) per lookup
+    abi.encode(staticEntryHashes),    // keccak256(abi.encode(staticEntry)) per batch.staticEntries[] entry
     abi.encode(blobHashes),           // EIP-4844 blob hashes selected by blobIndices[]
     keccak256(callData),              // batch-scoped calldata hash
-    customDataAcc                     // folded per-rollup custom data
+    abi.encode(customDataHashes),     // per-rollup custom data hashes, folded as an array
+    boundSender                       // msg.sender if bindMsgSenderInPublicInput, else address(0)
 ))
 ```
 
-`entryHashes` and `lookupCallHashes` cover the full serialised structs including all state deltas, call arrays, expected reentrant tables, rolling hashes, and return data — any tampering with any entry changes the hash.
+Each `customDataHashes[r]` is an **independent** hash of `(rollupId_r, customData_r)` — there is no rolling accumulator across rollups; the per-rollup hashes are computed separately and then folded into `sharedPublicInput` together as the whole `customDataHashes` array. `boundSender` is a submitter-binding term: when the batch composer sets `bindMsgSenderInPublicInput`, the resulting proof only verifies when submitted by the exact address it was built for, closing a front-running window where someone else replays your batch/proof from a different `msg.sender`.
+
+`entryHashes` and `staticEntryHashes` cover the full serialised structs (`batch.entries[]` and `batch.staticEntries[]` respectively) including all state deltas, call arrays, expected reentrant tables, rolling hashes, and return data — any tampering with any entry or static entry changes the hash.
 
 **Stage 2 — Per-proof-system accumulator mixing in vkeys:**
 
