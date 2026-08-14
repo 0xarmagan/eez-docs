@@ -219,7 +219,7 @@ The Bridge locks `1000e18` tokens in its contract and emits `TokensBridged`.
 
 The cross-chain call to `receiveTokens` is delivered by EEZ when the L1 batch that includes this block is verified. During the same L1 block, the L2 Bridge's `receiveTokens` is called through the source proxy.
 
-Confirm delivery by watching for `TokensBridged` on the L2 Bridge, or by polling the recipient's wrapped-token balance (Step 4). If the L1 batch that posted this call is never verified in the same block, delivery never happens — the `lastVerifiedBlock` gate (see [Post Batch](/guides/post-verify-batch#same-block-execution-requirement)) prevents any later-block consumption, so a missed same-block verification means resubmitting the bridge call in a new batch.
+Confirm delivery by watching for the L2 Bridge's `receiveTokens` events, not `TokensBridged` — that event only fires on the *source* chain, inside `bridgeTokens()`. The L2 Bridge never calls `bridgeTokens()` in this flow; it only calls `receiveTokens()`, which emits `WrappedTokensMinted` (this case — the token is foreign to L2) or `TokensReleased` (if the destination happens to be the token's native chain). So watch for `WrappedTokensMinted` on the L2 Bridge here, or poll the recipient's wrapped-token balance (Step 4). If the L1 batch that posted this call is never verified in the same block, delivery never happens — the `lastVerifiedBlock` gate (see [Post Batch](/guides/post-verify-batch#same-block-execution-requirement)) prevents any later-block consumption, so a missed same-block verification means resubmitting the bridge call in a new batch.
 
 ### Step 4 — Recipient holds WrappedToken on L2
 
