@@ -42,7 +42,7 @@ forge script script/DeployBridge.s.sol:BridgeDeployL1 \
 # Deploy Bridge on L2 (same salt → same address)
 forge script script/DeployBridge.s.sol:BridgeDeployL2 \
   --rpc-url $L2_RPC --broadcast --private-key $PK \
-  --sig "run(address,uint256,bytes32)" $MANAGER_L2 $L2_ROLLUP_ID $SALT
+  --sig "run(address,uint64,bytes32)" $MANAGER_L2 $L2_ROLLUP_ID $SALT
 # Outputs: Deployed to: <BRIDGE_L2 address> (identical to BRIDGE_L1 with a shared factory + salt)
 ```
 
@@ -55,7 +55,7 @@ Because there is no constructor, you must call `initialize` once on each deploym
 ```solidity
 function initialize(
     address _manager,   // EEZ (L1) or EEZL2 (L2) address
-    uint256 _rollupId,  // 0 for L1 mainnet, chain-specific ID for L2s
+    uint64 _rollupId,   // 0 for L1 mainnet, chain-specific ID for L2s
     address _admin      // admin who can call setCanonicalBridgeAddress
 ) external
 ```
@@ -82,12 +82,12 @@ Use `bridgeEther` to transfer native ETH from the current chain to a destination
 
 ```solidity
 function bridgeEther(
-    uint256 _rollupId,          // destination rollup ID
+    uint64 _rollupId,           // destination rollup ID
     address destinationAddress  // recipient on the destination
 ) external payable
 ```
 
-Send ETH as `msg.value`. The Bridge creates (or reuses) a `CrossChainProxy` representing `destinationAddress` on the destination rollup and forwards the full `msg.value` through it. EEZ records the ETH delta in `StateDelta.etherDelta` on the L1 execution entry, and the L2 sequencer forwards the same value through the source proxy to the recipient's `receive()`.
+Send ETH as `msg.value`. The Bridge creates (or reuses) a `CrossChainProxy` representing `destinationAddress` on the destination rollup and forwards the full `msg.value` through it. EEZ records the ETH delta in `StateUpdate.etherDelta` on the L1 execution entry, and the L2 sequencer forwards the same value through the source proxy to the recipient's `receive()`.
 
 ```solidity
 // Bridge 1 ETH to an address on rollup 1
@@ -102,7 +102,7 @@ Use `bridgeTokens` to transfer any ERC20 token cross-chain:
 function bridgeTokens(
     address token,              // ERC20 token to bridge (native or wrapped)
     uint256 amount,             // amount to transfer
-    uint256 _rollupId,          // destination rollup ID
+    uint64 _rollupId,           // destination rollup ID
     address destinationAddress  // recipient on the destination
 ) external
 ```
@@ -130,13 +130,13 @@ You do not call `receiveTokens` directly — EEZ calls it on the destination Bri
 ```solidity
 function receiveTokens(
     address originalToken,      // token address on the origin chain
-    uint256 originalRollupId,   // rollup ID where the native token lives
+    uint64 originalRollupId,    // rollup ID where the native token lives
     address to,                 // recipient on this chain
     uint256 amount,             // amount to deliver
     string calldata name,       // ERC20 name (for first-time WrappedToken deploy)
     string calldata symbol,     // ERC20 symbol
     uint8 tokenDecimals,        // ERC20 decimals
-    uint256 sourceRollupId      // rollup the call originated from
+    uint64 sourceRollupId       // rollup the call originated from
 ) external onlyBridgeProxy(sourceRollupId)
 ```
 
@@ -149,7 +149,7 @@ After a token has been bridged at least once, its `WrappedToken` is deployed and
 ```solidity
 function getWrappedToken(
     address originalToken,
-    uint256 originalRollupId
+    uint64 originalRollupId
 ) external view returns (address)
 ```
 
@@ -166,7 +166,7 @@ address predicted = address(uint160(uint256(keccak256(
 ))));
 ```
 
-The `ComputeWrappedTokenAddress` Forge script in `script/flash-loan-test/DeployFlashLoan.s.sol` automates this computation.
+There's no longer a standalone Forge script for this computation — `script/flash-loan-test/` (which used to host `ComputeWrappedTokenAddress`) is gone entirely. The same CREATE2 math is now inlined directly where it's needed: the `DeployL2` contract in `script/e2e/nested/L1_to_L2/flash-loan/E2EFlashLoan.s.sol` pre-computes a `WrappedToken` address this same way (mirroring `Bridge._getOrDeployWrapped`) before the token exists, so the token-gated NFT can reference it at deploy time.
 
 ## The WrappedToken Contract
 
