@@ -62,9 +62,11 @@ The **Flow Diagram** at the top of each scenario renders a node-and-arrow diagra
 
 Arrows between nodes are labeled with the function name and carry a direction indicator. The diagram makes the proxy-to-original and original-to-proxy relationships immediately visible.
 
-### Rollup States
+### Contract States
 
-Below the execution tables, the **State** panels show the current state root and ETH balance for each rollup at the selected step. The value is highlighted in green when it changes from the previous step, so you can see exactly which state transition each entry applies.
+Below the execution tables, the **L1 Contracts** and **L2 Contracts** panels list each contract involved in the scenario alongside its current value — a scenario-defined abstract state label (for example, a counter or a short descriptive tag), not a rollup-level state root or ETH balance. A contract's value is highlighted when it changes at the current step, so you can see which contracts were affected by the step you're on.
+
+The rollup-level [`StateDelta`](/reference/glossary#statedelta) fields (`rollupId`, `newState`, `etherDelta`) aren't shown at this panel — they appear inside an individual execution-table entry's own expanded detail view, alongside that entry's `calls[]` and `nestedActions[]`.
 
 ## Built-In Scenarios
 
