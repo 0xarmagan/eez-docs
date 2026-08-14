@@ -14,7 +14,7 @@ This page explains the mechanisms EEZ relies on to keep a cross-chain call trust
 
 **EEZ has not undergone a third-party security audit.** There is no bug bounty program at this time. The protocol is early-stage: interfaces, storage layout, and execution semantics are still in flux (see the warning above, shown on every page that describes contract behavior). Do not deploy EEZ contracts with real funds.
 
-The repository's own internal review notes (two informal reviews, not a third-party audit) record one HIGH-severity finding that has since been fixed — a reentrancy path via `_fetchVkMatrix()`/`threshold()` before the verified-block marker was set — and **two MEDIUM-severity findings that remain open**: a reentrancy risk in `registerRollup` via the `rollupContractRegistered` callback, and a double-registration risk with no check that a rollup's manager address is unique. Neither open item has a scheduled fix as of this writing.
+The repository's own internal review notes (two informal reviews, not a third-party audit) record one HIGH-severity finding that has since been fixed — a reentrancy path via `_getVerificationKeysPerRollup()`/`threshold()` before the verified-block marker was set — and **two MEDIUM-severity findings that remain open**: a reentrancy risk in `registerRollup` via the `rollupContractRegistered` callback, and a double-registration risk with no check that a rollup's manager address is unique. Neither open item has a scheduled fix as of this writing.
 
 The only proof system actually deployed anywhere in the repo's own tooling is [`AcceptAllProofSystem`](/reference/glossary#acceptallproofsystem) — the mock used by the e2e deploy scripts (`script/e2e/shared/DeployInfra.s.sol`). It accepts every proof unconditionally and provides no verification guarantee whatsoever; never use it outside local test networks. A more realistic placeholder, `ECDSAProofSystem`, also exists in the codebase — it recovers a single trusted signer's address from an ECDSA signature over the batch's public inputs hash, in place of a ZK verifier — but it has no deployment script anywhere in the repo and is currently exercised only by its own unit test, not by any running deployment. See [`IProofSystem`](/contracts/interfaces/iproofsystem) for the interface every proof system implements, and [Multi-Prover Model](/concepts/multi-prover) for how proof systems plug into the M-of-N threshold model.
 
@@ -38,7 +38,7 @@ See [Rolling Hash](/concepts/rolling-hash) for the exact tagged-event formulas.
 
 ## State-root content addressing
 
-Every entry's [`StateDelta`](/reference/glossary#statedelta) is checked against the target rollup's current on-chain state root before it's allowed to apply, and reverts `StateRootMismatch` on any mismatch. This prevents a stale or reordered entry — one computed against state that no longer matches the chain — from silently applying against the wrong state.
+Every entry's [`StateUpdate`](/reference/glossary#stateupdate) is checked against the target rollup's current on-chain state root before it's allowed to apply, and reverts `StateRootMismatch` on any mismatch. This prevents a stale or reordered entry — one computed against state that no longer matches the chain — from silently applying against the wrong state.
 
 ## What this model does not cover
 
