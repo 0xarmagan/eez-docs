@@ -151,7 +151,7 @@ function postAndVerifyBatch(
 | `AllImmediateL2TxsFailed` | The leading run of immediate L2Txs was non-empty and every one reverted — the whole post is unwound rather than proceeding on a fully-failed immediate prefix. |
 | `InvalidProof` | At least one proof system's `verify(proof, publicInputsHash)` returned false. |
 | `ThresholdNotMet(uint256 submitted, uint256 required)` (from `Rollup`) | A rollup's manager rejected the proof-system subset because `submitted` (the subset length) is below `required` (the rollup's configured threshold). |
-| `StateRootMismatch(uint64)`, `RollingHashMismatch`, `UnconsumedL2ToL1Calls`, `EtherDeltaMismatch`, `InsufficientRollupBalance`, `ExecutionNotFound`, `NoExpectedL1ToL2CallFound`, `RevertSpanOutOfBounds(uint256, uint256, uint256)` | **Not** raised by the immediate L2Tx drain (`_attemptExecuteImmediateL2Txs`) — those failures are caught internally and surface as `L2TxSkipped` instead, never reverting the batch. These can only revert `postAndVerifyBatch` itself if the meta hook drives a queued entry via a nested `executeCrossChainCall` / `executeL2Txs` call that fails and the caller's own `executeMetaCrossChainTransactions()` doesn't catch it — see those functions' error tables for exactly when each condition fires. |
+| `StateRootMismatch(uint64)`, `RollingHashMismatch`, `EtherDeltaMismatch`, `InsufficientRollupBalance`, `ExecutionNotFound`, `NoExpectedL1ToL2CallFound`, `RevertSpanOutOfBounds(uint256, uint256, uint256)` | **Not** raised by the immediate L2Tx drain (`_attemptExecuteImmediateL2Txs`) — those failures are caught internally and surface as `L2TxSkipped` instead, never reverting the batch. These can only revert `postAndVerifyBatch` itself if the meta hook drives a queued entry via a nested `executeCrossChainCall` / `executeL2Txs` call that fails and the caller's own `executeMetaCrossChainTransactions()` doesn't catch it — see those functions' error tables for exactly when each condition fires. |
 
 </details>
 
@@ -180,7 +180,7 @@ function _attemptExecuteImmediateL2Txs(ExecutionEntry calldata entry) public
 | --- | --- |
 | `NotSelf` | `msg.sender` is not the `EEZ` contract itself. |
 | `ResidualEntryEtherIn` | `_entryEtherDelta` is non-zero on entry — immediate L2Tx entries carry no inbound value, so a non-zero accumulator signals a corrupted execution context. |
-| `StateRootMismatch(uint64)`, `RollingHashMismatch`, `UnconsumedL2ToL1Calls`, `EtherDeltaMismatch`, `InsufficientRollupBalance`, `StaticCallWithValue`, `ExecutionNotFound`, `NoExpectedL1ToL2CallFound`, `RevertSpanOutOfBounds(uint256, uint256, uint256)` | Propagated from the inner `_executeEntry` call (via `_applyStateUpdates` and `_processNCalls`) — see `executeCrossChainCall`'s error table below for when most of these fire. `NoExpectedL1ToL2CallFound` is specific to this path: if this entry's own `expectedL1ToL2Calls` table is empty and a nested call re-enters looking for a match, there is no host table to check against. Caught by `postAndVerifyBatch`'s `try`/`catch`, so these never revert the batch itself — they only trigger `L2TxSkipped`. |
+| `StateRootMismatch(uint64)`, `RollingHashMismatch`, `EtherDeltaMismatch`, `InsufficientRollupBalance`, `StaticCallWithValue`, `ExecutionNotFound`, `NoExpectedL1ToL2CallFound`, `RevertSpanOutOfBounds(uint256, uint256, uint256)` | Propagated from the inner `_executeEntry` call (via `_applyStateUpdates` and `_processNCalls`) — see `executeCrossChainCall`'s error table below for when most of these fire. `NoExpectedL1ToL2CallFound` is specific to this path: if this entry's own `expectedL1ToL2Calls` table is empty and a nested call re-enters looking for a match, there is no host table to check against. Caught by `postAndVerifyBatch`'s `try`/`catch`, so these never revert the batch itself — they only trigger `L2TxSkipped`. |
 
 </details>
 
@@ -193,7 +193,17 @@ function _attemptExecuteImmediateL2Txs(ExecutionEntry calldata entry) public
 
 **Value:** Payable. The `msg.value` is tracked against the entry's `etherDelta` invariant.
 
-**Emits:** `CrossChainCallExecuted`, `ExecutionConsumed`, `EntryExecuted`, `L2ExecutionPerformed`, and (conditionally, from the shared `_processNCalls` path) `CallResult`, `CallsReverted`
+The documented Emits and Returns below differ depending on which branch handles the call:
+
+**Top-level call** (`_insideExecution() == false` — the common case, driven by `_consumeAndExecuteEntry`):
+
+- **Emits:** `CrossChainCallExecuted`, `ExecutionConsumed`, then — as the entry's `l2ToL1Calls` are processed via `_executeEntry` / `_processNCalls` — `L2ExecutionPerformed` (per state update applied), `CallResult` (per call), `CallsReverted` (per force-revert span), and finally `EntryExecuted` once the rolling-hash and ether-delta checks pass.
+- **Returns:** the matched `ExecutionEntry`'s pre-computed `returnData`.
+
+**Reentrant call** (`_insideExecution() == true` — the destination contract called back into the manager via a proxy, so the call routes to `_consumeNestedCall`/`_resolveNestedReentrant` instead):
+
+- **Emits:** `CrossChainCallExecuted` (always emitted before the branch dispatch), then whatever `_processNCalls` emits as the matched row's own `l2ToL1Calls` sub-array runs — `CallResult` (per call), `CallsReverted` (per force-revert span). **`ExecutionConsumed`, `EntryExecuted`, and `L2ExecutionPerformed` are never emitted on this path** — a reentrant call is a sub-action of an already-in-progress entry, not a new top-level consumption, and it applies no state updates of its own.
+- **Returns:** the matched `ExpectedL1ToL2Call`'s own `returnData` — **not** the entry's `returnData`.
 
 ```solidity
 function executeCrossChainCall(address sourceAddress, bytes calldata callData)
@@ -209,11 +219,7 @@ function executeCrossChainCall(address sourceAddress, bytes calldata callData)
 | `sourceAddress` | `address` | The original `msg.sender` as observed by the calling proxy — i.e., the address that initiated the cross-chain call from the remote rollup. This value is part of the `crossChainCallHash` used to look up the matching execution entry. |
 | `callData` | `bytes` | The calldata originally sent to the proxy. Combined with `sourceAddress` and the proxy's registered `(originalAddress, originalRollupId)` pair to derive the `crossChainCallHash` for entry lookup. |
 
-#### Returns
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `result` | `bytes` | The pre-computed `returnData` from the matched `ExecutionEntry`. This is the value the ZK proof committed to as the canonical return for this cross-chain call. |
+See **Returns** in the branch breakdown above — the value differs between the top-level and reentrant paths.
 
 #### Errors
 
@@ -227,7 +233,6 @@ function executeCrossChainCall(address sourceAddress, bytes calldata callData)
 | `RollingHashMismatch` | The computed rolling hash after processing all calls doesn't match the entry's committed `rollingHash`. A no-match on a reentrant call folds `CALL_NOT_FOUND` into the hash instead of reverting directly, so it surfaces here. |
 | `EtherDeltaMismatch` | Net ETH flow across the entry doesn't match the declared `etherDelta`. |
 | `InsufficientRollupBalance` | Applying a negative `etherDelta` would drive a rollup's ether balance below zero. |
-| `UnconsumedL2ToL1Calls` | Not all calls in the flat `l2ToL1Calls` array were consumed by the end of the entry. |
 | `StaticCallWithValue` | A flat call flagged `isStatic` in the entry's `l2ToL1Calls` carries a non-zero `value`. A `STATICCALL` cannot transfer ETH, so this is rejected rather than silently dropped. |
 | `RevertSpanOutOfBounds(uint256 start, uint256 span, uint256 length)` | A call's `revertNextNCalls` span extends past the end of the flat call array (malformed entry). |
 | `NoExpectedL1ToL2CallFound` | Edge case: fires only when this call is reentered from **inside** an immediate L2Tx entry (`postAndVerifyBatch`'s drain) whose own `expectedL1ToL2Calls` table is empty. Caught by the immediate-entry `try`/`catch` — surfaces as `L2TxSkipped`, never propagates past `postAndVerifyBatch`. |
@@ -269,8 +274,7 @@ function executeL2Txs(uint64 rollupId) external returns (bytes memory result)
 | `ExecutionNotFound` | No matching pure-L2 entry (`proxyEntryHash == bytes32(0)`) exists in the active stream at the rollup's current cursor position. |
 | `StateRootMismatch(uint64)` | The entry's `StateUpdate.currentState` doesn't match the current on-chain state root. |
 | `InsufficientRollupBalance` | Applying a negative `etherDelta` would drive the rollup's ether balance below zero. |
-| `RollingHashMismatch` | The rolling hash after processing doesn't match the entry's committed value. |
-| `UnconsumedL2ToL1Calls` | Not all calls in the flat `l2ToL1Calls` array were consumed by the end of the entry. |
+| `RollingHashMismatch` | The rolling hash after processing doesn't match the entry's committed value — this is also how an incomplete or over-long `l2ToL1Calls` array surfaces, since completeness is enforced structurally by the hash rather than by a dedicated count check. |
 | `EtherDeltaMismatch` | The net ETH flow doesn't match the declared `etherDelta`. |
 | `StaticCallWithValue` | A flat call flagged `isStatic` in the entry's `l2ToL1Calls` carries a non-zero `value`. A `STATICCALL` cannot transfer ETH, so this is rejected rather than silently dropped. |
 | `RevertSpanOutOfBounds(uint256 start, uint256 span, uint256 length)` | A call's `revertNextNCalls` span extends past the end of the flat call array (malformed entry). |
