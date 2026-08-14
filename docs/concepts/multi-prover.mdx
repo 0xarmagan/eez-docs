@@ -105,7 +105,7 @@ sharedPublicInput = keccak256(abi.encodePacked(
 ))
 ```
 
-`customData_r` is fetched from each rollup's manager via `getCustomData(batch.blockNumber)`. The reference implementation returns `abi.encode(timestamp, blockHash)`, binding the batch to a specific L1 block's context.
+`customData_r` is fetched from each rollup's manager via `getCustomData(batch.blockNumber)`. The reference implementation branches on `blockNumber`: `0` (no L1 context needed) returns an empty blob; `type(uint64).max` (latest context) returns `abi.encode(block.timestamp, blockhash(block.number - 1))` with a real, non-zero timestamp; any other specific block returns `abi.encode(uint256(0), blockHash)` — the timestamp is hardcoded to `0` (a past block's timestamp isn't recoverable on-chain, so it's read off-chain from the header instead), and the call reverts with `BlockHashUnavailable` if `blockhash` can't resolve that block (older than 256 blocks, or the current/future block).
 
 **Stage 2 — per proof system:**
 
