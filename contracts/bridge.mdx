@@ -29,7 +29,7 @@ The `WrappedToken` contract is the ERC-20 representation minted on destination c
 | `admin` | `address` | The admin that can call `setCanonicalBridgeAddress`. Set by `initialize`. |
 | `canonicalBridgeAddress` | `address` | Optional override for the bridge's own address used in cross-chain proxy lookups. If unset (`address(0)`), `address(this)` is used. |
 | `wrappedTokens` | `mapping(bytes32 => address)` | Maps a `(originalToken, originalRollupId)` salt to the deployed `WrappedToken` address. |
-| `wrappedTokenInfo` | `mapping(address => TokenInfo)` | Reverse lookup from a `WrappedToken` address back to its `originalToken` and `originalRollupId`. |
+| `wrappedTokenInfo` | `mapping(address => TokenInfo)` | Reverse lookup from a `WrappedToken` address back to its `originalToken` and `originalRollupId`. Note: `TokenInfo.originalRollupId` is stored as `uint64` — the `uint256 originalRollupId` passed to `receiveTokens` is silently truncated via `uint64(originalRollupId)` when written here. |
 
 ---
 
@@ -268,6 +268,7 @@ The `CrossChainProxy` security model ensures that `receiveTokens` can only be ca
 | Variable | Type | Description |
 |----------|------|-------------|
 | `BRIDGE` | `address` (immutable) | The Bridge contract that deployed this token. Only `BRIDGE` may call `mint` or `burn`. |
+| `_tokenDecimals` | `uint8` (private, immutable) | Backing storage for `decimals()`, set once at construction. Private — listed here for completeness, not directly readable on-chain. |
 
 ### Constructor
 
