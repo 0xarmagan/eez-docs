@@ -164,6 +164,10 @@ bash script/flash-loan-test/e2e.sh
 
 The script deploys EEZ on L1, EEZL2 on L2, deploys Bridge contracts on both chains with a shared CREATE2 salt, deploys the flash loan pool and executor contracts, and then executes the full flash loan flow.
 
+:::caution Known bug in `e2e.sh`
+The one-command `e2e.sh` currently fails at the L1 phase. Its `ExecuteFlashLoanL1` invocation passes an 8-address `--sig`/argument list, but `ExecuteFlashLoanL1.run()` takes **9** parameters — `proofSystemAddr` is omitted (see `script/flash-loan-test/ExecuteFlashLoan.s.sol`). This is a bug in the script itself, not something to work around in the call. Use the manual step-by-step commands below (Steps 3-5) instead — their `run(...)` signature and argument list are correct.
+:::
+
 #### Step 3 — Deploy contracts manually (network mode)
 
 For a persistent testnet, deploy each component separately:
@@ -202,7 +206,15 @@ forge script script/flash-loan-test/ExecuteFlashLoan.s.sol:ExecuteFlashLoanL1 \
   $FLASH_LOANERS_NFT $TOKEN $WRAPPED_TOKEN_L2
 ```
 
-`postAndVerifyBatch` and `executor.execute()` are bundled into a single `FlashLoanBatcher` transaction so both happen in the same L1 block. After this call, the flash loan pool's token balance is unchanged, `executorL2` holds a `FlashLoanersNFT` on L2, and the full cross-chain cycle has completed atomically.
+`postAndVerifyBatch` and `executor.execute()` are bundled into a single `FlashLoanBatcher` transaction so both happen in the same L1 block.
+
+:::caution Gap: Step 4 never triggers real L2 execution
+As written, this walkthrough does not reach the state described elsewhere on this page. `ExecuteFlashLoanL2` (Step 4) only calls `manager.loadExecutionTable(l2Entries, noLookupCalls)` — it never calls `executeIncomingCrossChainCall`, the entry point that actually invokes a destination contract (see `EEZL2.executeIncomingCrossChainCall` / `_processNCalls` in `src/L2/EEZL2.sol`). Every other e2e scenario under `script/e2e/` pairs `loadExecutionTable`/a table load with an explicit execution-triggering step; this script is missing that pairing.
+
+The gap runs deeper than a missing call, too: all three L2 entries in `ExecuteFlashLoanL2` are built with `incomingCalls` empty and `callCount: 0`. Even if a triggering call were added, `_processNCalls`'s `while (processed < count)` loop would run zero iterations — so no version of `receiveTokens`, `claimAndBridgeBack`, or `FlashLoanersNFT.claim()` is ever actually invoked on the L2 anvil with the entries as currently constructed. Fixing this requires reshaping the L2 entries themselves (populating `incomingCalls` and `callCount` per entry, following the `Pattern A`/`Pattern C` shapes documented in `script/e2e/TWO_SIDED_MIGRATION.md`), which is an upstream script change, not a documentation fix.
+
+Concretely, following the steps above as written: no `WrappedToken` is minted on L2, `FlashLoanersNFT.claim()` never fires, and the L2→L1 return bridge never executes. On the L1 side, Entry 1's nested `expectedL1ToL2Calls` frame (the return-bridge call) is never consumed for real, so `postAndVerifyBatch`/`executor.execute()` will revert with `UnconsumedL1ToL2Calls()` (`src/EEZ.sol`) rather than complete. The "flash loan pool balance unchanged / NFT claimed / cycle completed atomically" outcome describes the *intended* design (see [The Core Concept](#the-core-concept) above), not what the current test script produces.
+:::
 
 ## Key Takeaways
 
