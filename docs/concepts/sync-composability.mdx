@@ -55,7 +55,7 @@ The rolling hash check (`require(_rollingHash == entry.rollingHash)`) is the on-
 
 ## Flat Sequential Execution
 
-Rather than constructing a tree of nested cross-chain calls at runtime, EEZ flattens the entire execution tree into a single array of calls (`l2ToL1Calls[]` on L1) processed in order. Reentrant callbacks — calls that a destination contract on one rollup makes back to a contract on another — are pre-recorded in a parallel `expectedL1ToL2Calls[]` table and replayed in sequence using the same flat array. This design eliminates runtime discovery of call structure: the protocol never has to figure out what comes next, it only has to verify that what came next matches what was promised.
+Rather than discovering a tree of nested cross-chain calls at runtime, EEZ pre-records each level of the execution tree as its own flat array, run to completion by its own frame. The entry's own top-level calls live in one array (`l2ToL1Calls[]` on L1); reentrant callbacks — calls that a destination contract on one rollup makes back to a contract on another — are pre-recorded as rows in the unified `expectedL1ToL2Calls[]` table, and each row carries its **own** sub-call array rather than sharing the entry's. There is no global flat-call cursor or `callCount` partition tying these arrays together: a reentrant row is matched by content-addressing it against the live rolling hash at the moment it fires, and its resolver simply runs its own array start to finish. This design still eliminates runtime discovery of call structure — the protocol never has to figure out what comes next, it only has to verify that what came next matches what was promised — without requiring every frame to share one global array or cursor.
 
 ## Practical Use Cases
 
