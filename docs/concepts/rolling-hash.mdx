@@ -136,13 +136,13 @@ Consider an entry with three top-level calls — call **A**, call **B**, call **
 - `entry.l2ToL1Calls = [A, B, C]` — the entry's own top-level calls.
 - The reentrant row matched during A's dispatch carries `l2ToL1Calls = [X, Y]` as **its own** sub-array (not shared with the entry's array).
 
-Let `hA`, `hB`, `hC`, `hX`, `hY` denote each call's `crossChainCallHash`. The event sequence — and therefore the hash chain — looks like this:
+Let `hA`, `hB`, `hC`, `hX`, `hY` denote each call's `crossChainCallHash`, and let `hCallback` denote the **reentrant callback's own** `crossChainCallHash` — computed independently, from the callback's own source/target/calldata, at the moment it fires. `hCallback` is a distinct value from `hX`/`hY`: it identifies the reentrant call itself (A's destination calling back into the manager), not either of the outgoing calls that reentrant call's own sub-array goes on to dispatch. The event sequence — and therefore the hash chain — looks like this:
 
 ```text
 H0  = 0x0                                                (transient default, pre-seed)
 H1  = keccak256(rollupStatesHash, proxyEntryHash)         (_rollingHashEntryBegin — the seed)
 H2  = keccak256(H1, CALL_BEGIN,   hA)                     (A dispatched)
-H3  = keccak256(H2, NESTED_BEGIN, hX)                     (reentrant callback fires during A; matched row's identity is hX)
+H3  = keccak256(H2, NESTED_BEGIN, hCallback)              (reentrant callback fires during A; matched row's identity is hCallback, NOT hX)
 H4  = keccak256(H3, CALL_BEGIN,   hX)                     (X starts, inside the reentrant frame)
 H5  = keccak256(H4, CALL_END,     true, retX)
 H6  = keccak256(H5, CALL_BEGIN,   hY)                     (Y starts)
@@ -157,7 +157,7 @@ H13 = keccak256(H12, CALL_END,    true, retC)
 require(H13 == entry.rollingHash)                         // else RollingHashMismatch
 ```
 
-The reentrant row that satisfies `NESTED_BEGIN(hX)` is matched by its position key `keccak256(hX, H2)` — `H2` is `_rollingHash` at the exact instant the callback fires (right after `A`'s `CALL_BEGIN`, before `A`'s own `CALL_END`). Nothing about the outer call's own identity or count needs to be captured or replayed later; the nested frame's identity and the live hash at fire-time are the entire match key.
+The reentrant row that satisfies `NESTED_BEGIN(hCallback)` is matched by its position key `keccak256(hCallback, H2)` — `H2` is `_rollingHash` at the exact instant the callback fires (right after `A`'s `CALL_BEGIN`, before `A`'s own `CALL_END`). Nothing about the outer call's own identity or count needs to be captured or replayed later; the nested frame's identity (`hCallback`) and the live hash at fire-time are the entire match key — `hX`/`hY` don't enter into matching at all, since they're folded only once execution is already inside the matched frame.
 
 <details>
 <summary>For builders: nesting still shows up in structure, not in a number</summary>
