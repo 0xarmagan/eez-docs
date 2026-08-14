@@ -65,7 +65,7 @@ Wrong return data, an extra call, a missing callback, or reordered operations al
 
 A `uint256` identifier assigned by the [`EEZ`](/contracts/eez) registry when a rollup calls `registerRollup`. Every cross-chain call, execution entry, state delta, and proxy identity is keyed by `rollupId`.
 
-- **`rollupId == 0` is the mainnet sentinel** (`MAINNET_ROLLUP_ID`). L1 itself is always `0` in every cross-chain call hash computation. You **cannot** register a rollup with ID `0`, cannot create a [`CrossChainProxy`](#crosschainproxy) whose `originalRollupId` is `0`, and cannot construct an [`EEZL2`](/contracts/eezl2) with `_rollupId == 0` (constructor reverts `InvalidRollupId`).
+- **`rollupId == 0` is the mainnet sentinel** (`MAINNET_ROLLUP_ID`). L1 itself is always `0` in every cross-chain call hash computation. You **cannot** register a rollup with ID `0`, and cannot construct an [`EEZL2`](/contracts/eezl2) with `_rollupId == 0` (constructor reverts `InvalidRollupId`). The "cannot create a `CrossChainProxy` for your own chain" rule is chain-relative, not a flat `originalRollupId == 0` check — see the [`CrossChainProxy`](#crosschainproxy) entry for the exact condition.
 - **Registered rollup IDs start at `1`** and are assigned sequentially in the order rollups are registered.
 - Once assigned, a `rollupId` is permanent — the manager address bound to it in the registry is immutable.
 
