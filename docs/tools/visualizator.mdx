@@ -21,6 +21,10 @@ The `visualizator/` directory ships two distinct tools:
 - **Scenario demo (`visualizator/index.html`)** — the static, single-file HTML page described below. This is what's hosted at [https://visualizator-woad.vercel.app](https://visualizator-woad.vercel.app). It works entirely from the built-in scenario data and has no network connectivity of its own.
 - **Live dashboard (`visualizator/dashboard/`)** — a separate Vite + React + viem application that connects directly to real L1 and L2 RPC endpoints for live block inspection. Its Connection Bar lets you enter L1/L2 RPC URLs and contract addresses; the `useChainWatcher` and `useAutoDiscovery` hooks then watch both chains and stream real cross-chain execution events into the same execution-table / flow-diagram / state-panel UI as the scenario demo.
 
+:::warning
+The live dashboard's ABI layer (`visualizator/dashboard/src/abi/rollups.ts`, `crossChainManagerL2.ts`) predates this protocol refactor and has not been updated to match the current contracts. It still encodes `rollupId` as `uint256` (now `uint64`), decodes removed types (`stateDeltaTuple`, `lookupCallTuple`, `nestedActionTuple`), expects the old multi-sub-batch `postBatch(batches[])` shape (now a single `postAndVerifyBatch(batch)` call), and listens for the removed `RollupContractChanged` manager-handoff event. Connected to a current deployment, it will likely fail to decode real transactions or misrepresent their contents. Treat the live dashboard as unmaintained until its ABI layer is refreshed — the scenario demo above (built-in example data, no live decoding) is unaffected.
+:::
+
 For live network inspection without running the dashboard yourself, you can also use the EEZ trace decoder CLI (see [Trace Decoder](/tools/trace-decoder)) to produce a unified execution diagram from real transaction traces.
 
 ## What the Visualizator Shows
@@ -66,7 +70,7 @@ Arrows between nodes are labeled with the function name and carry a direction in
 
 Below the execution tables, the **L1 Contracts** and **L2 Contracts** panels list each contract involved in the scenario alongside its current value — a scenario-defined abstract state label (for example, a counter or a short descriptive tag), not a rollup-level state root or ETH balance. A contract's value is highlighted when it changes at the current step, so you can see which contracts were affected by the step you're on.
 
-The rollup-level [`StateDelta`](/reference/glossary#statedelta) fields (`rollupId`, `newState`, `etherDelta`) aren't shown at this panel — they appear inside an individual execution-table entry's own expanded detail view, alongside that entry's `calls[]` and `nestedActions[]`.
+The rollup-level [`StateUpdate`](/reference/glossary#stateupdate) fields (`rollupId`, `newState`, `etherDelta`) aren't shown at this panel — they appear inside an individual execution-table entry's own expanded detail view, alongside that entry's `calls[]` and `nestedActions[]`.
 
 ## Built-In Scenarios
 
@@ -76,8 +80,8 @@ The Visualizator ships with several built-in scenarios corresponding to the EEZ 
 |---|---|
 | L1 → L2 | A single L1 entry calls an L2 contract via proxy; one entry per chain, consumed sequentially by execution index |
 | L2 → L1 | A single L2 entry calls an L1 contract via proxy; one entry per chain, consumed sequentially by execution index |
-| L2 → L1 → L2 | Starts on L2, crosses to L1, and the L1 contract dispatches a reentrant nested call back to L2 via `_consumeNestedAction` |
-| L1 → L2 → L1 | Starts on L1, crosses to L2, and the L2 contract dispatches a reentrant nested call back to L1 via `_consumeNestedAction` |
+| L2 → L1 → L2 | Starts on L2, crosses to L1, and the L1 contract dispatches a reentrant nested call back to L2 via `_consumeNestedCall` |
+| L1 → L2 → L1 | Starts on L1, crosses to L2, and the L2 contract dispatches a reentrant nested call back to L1 via `_consumeNestedCall` |
 | Cross-Chain Flash Loan | A flash loan on L1 bridges tokens to L2, claims a token-gated NFT, bridges the tokens back, and repays the loan — spans three entries per chain plus a nested action for the bridge return |
 
 Select a scenario using the tabs at the top of the page.
