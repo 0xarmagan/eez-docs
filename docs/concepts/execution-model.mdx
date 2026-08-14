@@ -110,7 +110,7 @@ See [Build Entries](/guides/build-execution-entries) for the constructor walkthr
 An entry's `proxyEntryHash` field determines how it is consumed:
 
 - **Immediate** (`proxyEntryHash == bytes32(0)`): The entry represents a pure L2 transaction or a batch's built-in L1 work. `postAndVerifyBatch` executes these inline, before the [meta hook](/reference/glossary#meta-hook) (the callback that lets the batch submitter consume transient entries in the same transaction) fires. If an immediate entry reverts, EEZ emits `ImmediateEntrySkipped` and continues — it is not a hard error.
-- **Deferred** (`proxyEntryHash != bytes32(0)`): The entry is triggered by a proxy call. It sits in the per-rollup queue (or the transient stream) waiting for `executeCrossChainCall` or `executeL2TX` to consume it. The caller's proxy recomputes `crossChainCallHash` from the live call context; if it matches the entry's `proxyEntryHash`, the entry is consumed and executed.
+- **Deferred** (`proxyEntryHash != bytes32(0)`): The entry is triggered by a proxy call. It sits in the per-rollup queue (or the transient stream) waiting for `executeCrossChainCall` to consume it — `executeL2TX` only ever consumes immediate entries. The caller's proxy recomputes `crossChainCallHash` from the live call context; if it matches the entry's `proxyEntryHash`, the entry is consumed and executed.
 
 ## What Happens at `postAndVerifyBatch`
 
