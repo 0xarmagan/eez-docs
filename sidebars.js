@@ -1,59 +1,65 @@
 // @ts-check
 
-// This runs in Node.js - Don't use client-side code here (browser APIs, JSX...)
-
 /**
- * Creating a sidebar enables you to:
- - create an ordered group of docs
- - render a sidebar for each doc of that group
- - provide next/previous navigation
-
- The sidebars can be generated from the filesystem, or explicitly defined here.
-
- Create as many sidebars as you want.
-
- @type {import('@docusaurus/plugin-content-docs').SidebarsConfig}
+ * The site is a mirror of eez-core-protocol/docs (pinned at commit 9735f53),
+ * plus three "Get started" pages that exist only as landing points for the
+ * three target audiences on the introduction page.
+ *
+ * Everything under "Specification" is transferred from upstream — the section
+ * order follows the source repo's own layout, and CORE_PROTOCOL_SPEC.md is
+ * split into its nine A–I sections so each is independently navigable.
+ *
+ * @type {import('@docusaurus/plugin-content-docs').SidebarsConfig}
  */
 const sidebars = {
   docsSidebar: [
     {
       type: 'category',
       label: 'Get Started',
-      items: ['introduction', 'quickstart', 'architecture'],
+      collapsed: false,
+      items: ['introduction', 'quickstart', 'architecture', 'register-rollup'],
     },
     {
       type: 'category',
-      label: 'Core Concepts',
+      label: 'Core Protocol Spec',
+      link: {type: 'doc', id: 'spec/core-protocol/index'},
       items: [
-        'concepts/sync-composability',
-        'concepts/execution-model',
-        'concepts/rolling-hash',
-        'concepts/multi-prover',
-        'concepts/cross-chain-proxy',
-        'concepts/blob-format',
+        'spec/core-protocol/a-data-model',
+        'spec/core-protocol/b-protocol-functions',
+        'spec/core-protocol/c-action-hash',
+        'spec/core-protocol/d-execution-model',
+        'spec/core-protocol/e-rolling-hash',
+        'spec/core-protocol/f-static-entry-resolution',
+        'spec/core-protocol/g-entry-lifecycle',
+        'spec/core-protocol/h-invariants',
+        'spec/core-protocol/i-security-considerations',
       ],
     },
     {
       type: 'category',
-      label: 'Guides',
-      items: [
-        'guides/register-rollup',
-        'guides/build-execution-entries',
-        'guides/post-verify-batch',
-        'guides/bridge-tokens',
-        'guides/flash-loans',
-        'guides/lookup-calls',
-      ],
+      label: 'Entry Specs',
+      collapsed: false,
+      items: ['spec/execution-entries', 'spec/static-entries'],
     },
     {
       type: 'category',
-      label: 'Tools',
-      items: ['tools/trace-decoder', 'tools/visualizator'],
+      label: 'Proving',
+      collapsed: false,
+      items: ['spec/multi-prover'],
+    },
+    {
+      type: 'category',
+      label: 'Blob Format',
+      items: [
+        'spec/blobs/blob-format',
+        'spec/blobs/u256-codec',
+        'spec/blobs/future-optimizations',
+      ],
     },
     {
       type: 'category',
       label: 'Reference',
-      items: ['reference/security', 'reference/caveats', 'reference/glossary'],
+      items: ['spec/caveats'],
     },
   ],
 };

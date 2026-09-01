@@ -1,0 +1,33 @@
+---
+title: "G. Execution Entry Lifecycle"
+sidebar_label: "Entry Lifecycle"
+description: "From L1 posting through L2 loading, consumption, and table clearing."
+---
+
+## G.1 L1 Posting
+
+`postAndVerifyBatch` resets each touched rollup's `verificationByRollup[rid]` (wipe on every verify), drains the leading immediate L2Txs straight from calldata, loads the meta-hook remainder of the immediate prefix into `_transientEntries` / `_transientStaticEntries` and runs the meta hook, publishes the batch's remainder into the per-rollup queues unconditionally, then wipes the transient tables.
+
+Within a single `postAndVerifyBatch`:
+1. Reentry guard: `_insideExecution() || _transientEntries.length != 0` (revert `PostBatchReentry` otherwise). Check composer state-root pins. Validate structure (including per-entry proxy-protection). Verify proofs (`checkProofSystemsAndGetVkeys` + `getCustomData` per rollup — both `view` — then `IProofSystem.verify` per PS).
+2. Mark `verificationByRollup[rid].lastVerifiedBlock = block.number` for every touched rollup; wipe each touched rollup's queues / cursor on every verify (`_markVerifiedBlockAndDeletePreviousEntries`).
+3. Drain the leading run of immediate L2Txs (`proxyEntryHash == 0`) via try/catch self-calls (skip-on-revert with `L2TxSkipped`; `AllImmediateL2TxsFailed` if a non-empty run had zero successes).
+4. Meta hook runs if immediate-prefix entries remain past the L2Tx run AND `msg.sender` has code — the remainder is pushed to the transient tables first (consumption advances the global `_transientEntryIndex`; per-rollup cursors stay untouched until persistent consumption).
+5. Publish the batch's remainder to per-rollup queues by `destinationRollupId` (unconditionally — even if the transient prefix wasn't fully drained; there is no drain-cleanly gate). Soundness backstop is `StateUpdate.currentState`.
+6. Wipe transient tables; reset `_transientEntryIndex`. Emit `BatchPosted(batch.rollupIdsWithProofSystems.length)`.
+
+## G.2 L2 Loading
+
+`loadExecutionTable` clears `entries` and `staticEntries`, copies the new entries / static entries in, resets `entryIndex`, and sets `lastLoadBlock = block.number`. `executeIncomingCrossChainCall` performs the same load atomically before driving `entries[0]`. There is no transient table and no per-rollup queue map on L2.
+
+## G.3 Consumption
+
+Forward-scan — per consumption, the cursor jumps to `matchIndex + 1` (per-rollup `entryQueueIndex`, the global `_transientEntryIndex` during the transient phase, or L2's `entryIndex`). Each entry is consumed at most once; entries skipped by the scan (stale state, non-matching hash) are permanently passed over. A `success == false` entry's revert rolls the cursor advance back, so it stays reachable until a later successful consumption advances past it. There is no swap-and-pop.
+
+## G.4 Same-Block Restriction
+
+On L1, `executeCrossChainCall` / `executeL2Txs` revert `ExecutionNotInCurrentBlock(rollupId)` if `verificationByRollup[rollupId].lastVerifiedBlock != block.number`. On L2, same with `lastLoadBlock`. Entries that aren't consumed in the posting block are never read again (the read gate), and the queue is wiped by the next batch that verifies the rollup. **Static entries are exempt on L1 only** — no block gate there (state-root pins bound staleness); L2's top-level static path shares the `lastLoadBlock == block.number` gate (no pins).
+
+## G.5 Table Clearing
+
+Each `postAndVerifyBatch` wipes the touched rollups' queues (on every verify, including same-block re-verifies); `loadExecutionTable` wipes the entire L2 table. Builders must produce self-contained batches.

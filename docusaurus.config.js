@@ -69,17 +69,6 @@ const config = {
     ],
   ],
 
-  plugins: [
-    [
-      '@docusaurus/plugin-content-docs',
-      {
-        id: 'contracts',
-        path: 'contracts',
-        routeBasePath: 'contracts',
-        sidebarPath: './sidebarsContracts.js',
-      },
-    ],
-  ],
 
   themeConfig:
     /** @type {import('@docusaurus/preset-classic').ThemeConfig} */
@@ -124,14 +113,7 @@ const config = {
             label: 'Documentation',
           },
           {
-            type: 'doc',
-            docId: 'eez',
-            docsPluginId: 'contracts',
-            position: 'left',
-            label: 'Contract Reference',
-          },
-          {
-            href: 'https://github.com/eez-association/eez-core-protocol',
+            href: 'https://github.com/eez-association/eez-core-protocol/tree/main/docs',
             label: 'GitHub',
             position: 'right',
           },

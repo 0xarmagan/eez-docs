@@ -4,9 +4,9 @@ sidebar_label: "Register Rollup"
 description: "Deploy a Rollup manager contract, configure proof systems and threshold, then register your rollup with the EEZ registry to enable cross-rollup execution."
 ---
 
-import UnauditedWarning from '../_unaudited-warning.mdx'
+import AuditStatus from './_audit-status.mdx'
 
-<UnauditedWarning />
+<AuditStatus />
 
 Registering is a one-time bootstrap step for rollup operators. If you run a based rollup and want its state to be visible to — and callable from — other rollups in the EEZ network, you need to register once on L1 so the central `EEZ` registry can track your state root, own your deferred execution queue, and route cross-chain calls to your rollup. DApp developers and end users do **not** register; they interact with rollups that are already registered. Plan for the registration transaction to be issued by the same party that will operate your proof-system configuration long-term, since the manager you register controls thresholds and verification keys forever after.
 
@@ -130,6 +130,6 @@ The `rollupContract` pointer in the EEZ registry is immutable after registration
 
 ## Key addresses and IDs
 
-See [`rollupId`](/reference/glossary#rollupid) in the glossary for the full definition, including the `MAINNET_ROLLUP_ID = 0` sentinel and immutability rules.
+See [`rollupId`](/spec/execution-entries) in the glossary for the full definition, including the `MAINNET_ROLLUP_ID = 0` sentinel and immutability rules.
 
 Your `rollupId` is the single identifier you pass everywhere: `destinationRollupId` in execution entries, the rollup ID argument to `executeL2TX`, and the ID forwarded in cross-chain call hashes. Keep it accessible — your builder node needs it at batch construction time. In your manager's storage, a `rollupId` of `0` doubles as the "not yet registered" sentinel — never use it as a live rollup identifier before the registration callback fires.

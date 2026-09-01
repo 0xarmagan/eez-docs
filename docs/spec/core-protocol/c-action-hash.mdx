@@ -1,0 +1,69 @@
+---
+title: "C. Action Hash Computation"
+sidebar_label: "Action Hash"
+description: "How crossChainCallHash is derived at every keying site."
+---
+
+The formula:
+
+```solidity
+// EEZBase.computeCrossChainCallHash, inherited by both managers
+crossChainCallHash = keccak256(abi.encode(
+    isStatic, sourceAddress, sourceRollupId, targetAddress, targetRollupId, value, callGas, data
+))
+```
+
+The sites differ only in the `callGas` value they fold:
+
+| Matching site | `callGas` folded |
+|---|---|
+| Everything on L1 (entry points, flat calls, reentrant rows, static) | `0` (`ZERO_CALL_GAS`) |
+| L2 inbound binding (`executeIncomingCrossChainCall` vs `entries[0].proxyEntryHash`) | `0` (`ZERO_CALL_GAS`) |
+| L2 flat-call `CALL_BEGIN` folds (§C.5) | `0` (`ZERO_CALL_GAS`) |
+| L2 static matching (`staticCrossChainCall`, both branches) | `0` (`ZERO_CALL_GAS`) |
+| Calls LEAVING an L2 (`EEZL2.executeCrossChainCall` — top-level `proxyEntryHash` match AND the nested `expectedOutgoingHash` key) | **`uint64(gasleft())` when `USE_GAS_LEFT`, else `0`** |
+
+Under `useGasLeft = false` (current deployments and all test fixtures) every site folds `0`, so all keys for the same seven fields coincide. See §B.1 for the rationale and the `callGas` ⇄ `CrossChainCall.gas` relationship.
+
+Off-chain tooling (`script/e2e/shared/E2EHelpers.sol`): `crossChainCallHash` / `crossChainCallHashStatic` fold `callGas = 0`; `crossChainCallHashL2Out` keys L2-outgoing calls.
+
+## C.1 Hash from `executeCrossChainCall` (L1)
+
+| Field | Value |
+|---|---|
+| `isStatic` | `false` (`NOT_STATIC_CALL`) |
+| `sourceAddress` | `sourceAddress` (msg.sender of the original proxy call) |
+| `sourceRollupId` | `MAINNET_ROLLUP_ID = 0` |
+| `targetAddress` | `proxyInfo.originalAddress` |
+| `targetRollupId` | `proxyInfo.originalRollupId` |
+| `value` | `msg.value` |
+| `callGas` | `0` (`ZERO_CALL_GAS`) — L1 never keys on gas |
+| `data` | `callData` (forwarded by the proxy as `msg.data`) |
+
+## C.2 Hash from `executeCrossChainCall` (L2)
+
+**This is the one site that can fold a non-zero `callGas`.** Fields as in C.1, except:
+
+| Field | Value |
+|---|---|
+| `sourceRollupId` | this L2's `ROLLUP_ID` |
+| `targetRollupId` | `proxyInfo.originalRollupId` (the proxied counterparty — L1 or another L2) |
+| `callGas` | `uint64(gasleft())` at manager entry when `USE_GAS_LEFT`, else `0` |
+
+The folded value is echoed in L2's `CrossChainCallExecuted` event, and on a top-level miss in `EntryNotFound(crossChainCallHash, callGas)`, so a builder can recover the exact key.
+
+## C.3 Hash from `staticCrossChainCall`
+
+`isStatic = true` (`IS_STATIC`), `value = 0` (STATICCALL cannot carry ETH), and `callGas = 0` (a static read never keys on gas, even on an L2 with `USE_GAS_LEFT`); source/target pairs as in the corresponding `executeCrossChainCall`. Because `isStatic` is folded into the hash, a static read keys distinctly from an otherwise-identical state-changing call — this is what routes static rows vs call rows inside the unified reentrant table without a mode field.
+
+## C.4 Hash for reentrant calls
+
+Identical to the proxy hash that triggered the reentrant call — so a reentrant call leaving an L2 folds `callGas` exactly like a top-level one (C.2), and every reentrant call on L1 folds `0`. The protocol does not distinguish "top-level" vs "reentrant" in the call hash itself; the routing decision (`_consumeAndExecuteEntry` vs `_consumeNestedCall`) is made at runtime via `_insideExecution()`. Inside the reentrant table, the call hash is bound to its execution point by the position key `keccak256(abi.encodePacked(crossChainCallHash, expectedRollingHash))` (§A.1), computed by `EEZBase._computeExpectedL1toL2Hash`.
+
+## C.5 Hash for flat-call `CALL_BEGIN` folds
+
+Each executed flat call folds its own identity hash into `CALL_BEGIN` (§E): `computeCrossChainCallHash(cc.isStatic, cc.sourceAddress, cc.sourceRollupId, cc.targetAddress, MAINNET_ROLLUP_ID, cc.value, ZERO_CALL_GAS, cc.data)` on L1, with `ROLLUP_ID` as the target on L2 — the executing chain is always the target. **`callGas = 0` on both chains**: a flat call is a call being DELIVERED on the executing chain, not one leaving it, so `cc.gas` is passed to the proxy but never folded into the identity hash.
+
+## C.6 No `crossChainCallHash` for L2Tx entries
+
+`executeL2Txs(rollupId)` requires `entry.proxyEntryHash == bytes32(0)`. There is no separate L2Tx hash — the entry is identified by being the next zero-hash entry the forward scan reaches on the rollup's queue.

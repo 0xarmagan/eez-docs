@@ -1,0 +1,77 @@
+---
+title: "D. Execution Model"
+sidebar_label: "Execution Model"
+description: "Forward-scan entry consumption, flat calls, reentrant calls, and revert spans."
+---
+
+## D.1 Forward-Scan Entry Consumption
+
+Entries in `verificationByRollup[rid].entryQueue` (or `_transientEntries` during `postAndVerifyBatch`) are consumed via the rollup's `entryQueueIndex` (or the global `_transientEntryIndex` during the transient phase — per-rollup cursors stay untouched then). Consumption is a **forward scan** from the cursor to the first entry satisfying the full match predicate (`_entryMatches`):
+
+```
+entry.proxyEntryHash      == crossChainCallHash        // identity
+entry.destinationRollupId == destRid                   // routing
+every stateUpdates[i].currentState == live root         // state preconditions
+```
+
+The cursor is then set to `matchIndex + 1`. A non-matching entry (wrong hash, wrong routing, stale state) is **skipped**, not reverted on; the scan reverts `ExecutionNotFound` only at the end of the queue. A consumed entry with `success == false` runs, verifies, then reverts with its `returnData` — rolling back the cursor advance — so it is re-callable and only drops out of reach once a later successful consumption advances past it. There is no swap-and-pop.
+
+Cross-rollup independence: a stuck cursor on one rollup does not block consumption on another — each rollup's queue advances on its own. (During the transient phase the cursor is global, which is why `destinationRollupId == destRid` is load-bearing there.)
+
+## D.2 Flat Call Processing
+
+Within an entry, the **top-level** calls live in the entry's own flat array (`l2ToL1Calls[]` on L1, `incomingCalls[]` on L2), and every reentrant frame carries its **own** flat sub-array. `_processNCalls` walks whichever array it is given with a plain local index and always runs it to completion — there is no shared global cursor, no `callCount`, and no partition invariant. Call-count completeness is structural.
+
+A flat call dispatches via `CALL` normally, or via `STATICCALL` when `isStatic == true` (read-only; `value` must be 0 or the entry reverts `StaticCallWithValue`). Each call's identity hash folds into `CALL_BEGIN` and its `(success, retData)` outcome into `CALL_END` (§E) — a naturally-reverting destination is captured as `CALL_END(false, revertData)` without failing the entry.
+
+The end-of-entry accounting is carried entirely by the rolling hash (§H.4): wrong results, missing/extra calls, and skipped reentrant frames all diverge the final hash.
+
+## D.3 Reentrant Calls (unified `ExpectedL1ToL2Call` table)
+
+When the destination contract called by `_processNCalls` calls back into a proxy, the proxy forwards to `executeCrossChainCall`. Inside that call, `_insideExecution() == true`, so the path branches to `_consumeNestedCall` (L1 additionally checks the target rollup against the entry's proven set — `ReentrantDestinationNotVerified`). Resolution (L1 names; L2 mirrors with `expectedOutgoingCalls` / `expectedOutgoingHash` / `_lastOutgoingCallConsumed`):
+
+**1. Compute the position key** `expectedL1toL2Hash = keccak256(abi.encodePacked(crossChainCallHash, _rollingHash))` — the call's identity bound to the live rolling hash, which folds every prior call and nesting boundary and therefore uniquely pins the execution point.
+
+**2. Strict forward scan** of the active entry's `expectedL1ToL2Calls[]` from `_lastL1ToL2CallConsumed`. The first key match IS the row; advance `_lastL1ToL2CallConsumed = i + 1` **before** resolving, then `_resolveNestedReentrant`:
+   - `success == true`: fold `NESTED_BEGIN(crossChainCallHash)`, run the row's own `l2ToL1Calls[]` to completion (folding into the host's continuous hash), fold `NESTED_END`, return `row.returnData` to the destination.
+   - `success == false`: fold `NESTED_BEGIN(crossChainCallHash)`, run the row's own sub-array, check `_rollingHash == row.revertedOrStaticRollingHash` (else `RollingHashMismatch`), then revert with `row.returnData`. The destination's `try/catch` absorbs the revert; the EVM rolls back the frame's state, hash folds, and cursor advance automatically.
+
+**3. No match** → fold `CALL_NOT_FOUND(crossChainCallHash)` into `_rollingHash` and return `""`. The entry later fails its rolling-hash check (`RollingHashMismatch`) at the `_executeEntry` boundary — the divergence survives any intermediate try/catch and rides the `ContextResult` payload across a revert-span boundary, so no side flag is needed. (Returning empty bytes may also revert the *caller's* frame sooner if it ABI-decodes a non-empty payload.)
+
+**Why this works for reverts.** A reverting reentrant call needs **only** a `success == false` row — no `revertNextNCalls` wrapper: the destination's `try/catch` is the isolation boundary, the terminal revert restores the cursor and hash to the pre-call values, and the row's `revertedOrStaticRollingHash` pins exactly what the reverted frame executed.
+
+**Why static reads don't match here.** The key is computed with `isStatic = false`; a static row's `crossChainCallHash` folds `isStatic = true`, so the keys can never collide. The proxy routes real STATICCALL frames to `staticCrossChainCall` (§F), which scans the same unified table with the `isStatic = true` key and resolves via `_resolveStaticEntry` — without advancing the cursor (a read is position-pinned, not consumed).
+
+A reverted sub-execution reuses the host entry's table for its own reentrant calls (Solidity forbids recursive structs); the live `_rollingHash` folded into each key keeps the contexts distinct.
+
+### D.3.1 Nested children must be laid out after their parent (forward-cursor layout)
+
+Reentrant rows in `expectedL1ToL2Calls[]` are content-addressed by `(crossChainCallHash, expectedRollingHash)` and located by a **strict forward scan** from `_lastL1ToL2CallConsumed`: a call only ever matches a row at or after the cursor, never one before it. The match is the rolling hash, not the array position — but the cursor governs *which slice of the table is still visible*.
+
+When a reentrant row at index `i` is resolved (`_resolveNestedReentrant`), the cursor is advanced to `i + 1` **before** the row's own sub-calls run, not after. This keeps the cursor monotonic: any reentrant call the sub-frame fires scans strictly forward from `i + 1`, and a successful frame leaves the cursor at its high-water mark with no restore step. (On revert the whole frame's writes — including this advance — roll back with the EVM, so the cursor returns to the parent's value automatically.)
+
+**Layout rule for provers/builders.** A nested frame's own reentrant children must be placed in `expectedL1ToL2Calls[]` at indices **strictly greater than their parent row's index** — i.e. the table must be in depth-first / execution order. A child placed at an index `≤` its parent is below the cursor when the sub-frame scans, so it is never found: the reentrant call folds `CALL_NOT_FOUND` into the rolling hash and the entry reverts at its boundary (`RollingHashMismatch`). This is purely a *findability* constraint; it never produces a wrong match, because the rolling-hash key is unique per call position. Sibling rows at the same nesting level are already forward-ordered by the same cursor discipline.
+
+## D.4 Revert Span (`revertNextNCalls`)
+
+`revertNextNCalls > 0` on a flat call opens an isolated EVM context for the next `revertNextNCalls` calls (that call included). Mechanism:
+
+1. `_processNCalls` checks the span fits (`RevertSpanOutOfBounds` otherwise), zeroes the trigger's `revertNextNCalls` in its throwaway memory copy, and slices the span (`_sliceL2ToL1Calls` / `_sliceCrossChainCalls`) into a fresh memory array — so the isolated re-run reads the trigger as a normal call instead of recursing into the span.
+2. `try this.executeInContextAndRevert(span)`. The inner self-call runs `_processNCalls(span)` — advancing `_rollingHash` and `_lastL1ToL2CallConsumed` based on the calls inside the span — then **always** reverts with `ContextResult(_rollingHash, _lastL1ToL2CallConsumed, 0)` (L2: `_lastOutgoingCallConsumed`).
+3. The EVM revert rolls back all storage and transient state inside the self-call, including any ETH transfers and their `_entryEtherDelta` subtractions. The values escape via the revert data.
+4. The caller decodes `ContextResult` and writes the rolling hash and reentrant cursor back into transient storage. A reentrant no-match observed inside the span was folded into that rolling hash (`CALL_NOT_FOUND`), so it still surfaces at the entry boundary. The rolling hash now reflects what happened inside the span even though the EVM rolled the state back.
+5. The caller emits `CallsReverted(entryIndex, start, n)` and skips its local index past the span.
+
+A single mechanism handles atomic rollback: there are no continuation entries, no per-rollup state-root restoration, no scope tree to navigate. The "what happened" is encoded by the calls in the span; the "what state survives" is whatever the EVM rolled back.
+
+### D.4.1 When to use `revertNextNCalls` (and when not to)
+
+**Use `revertNextNCalls > 0` only for forced reverts** — calls (or sequences of calls) that *would* succeed against the destination but whose state effects must not survive. The canonical scenario is a cross-chain call from rollup A to rollup B where the destination on B succeeds, but the prover output records that the call must be rolled back (for example, because the higher-level transaction that contained the call was reverted on A). The rolling hash still commits to a `CALL_END(success=true, retData=…)` outcome — what was promised — while the EVM rolls the state back.
+
+**Do not use it to model a destination that naturally reverts.** With `revertNextNCalls = 0`, `_processNCalls` already invokes the destination via the proxy's `.call`, captures `(success=false, retData=revertReason)`, and hashes that into `CALL_END`. The destination's own revert rolls back its own state. Wrapping a single naturally-reverting call in a span of 1 produces the same observable state for no benefit — the mechanism only earns its keep when state would otherwise survive.
+
+The protocol's revert paths are distinct — the full situation → structure decision table is [`EXECUTION_ENTRY_SPEC.md`](/spec/execution-entries) § "When to use which structure". In particular, a **reentrant** call that reverts (caller wraps it in `try/catch`) is a `success == false` row in the unified reentrant table (§D.3) and **must not** use `revertNextNCalls`: the destination's `try/catch` already provides the isolation boundary, and the row runs the reverted frame with its own sub-hash check. Wrapping it in a span would consume flat-call slots the prover did not allocate.
+
+## D.5 Flat Call Model
+
+The off-chain prover emits, per entry, a flat top-level `l2ToL1Calls[]` array plus the unified `ExpectedL1ToL2Call[]` table (L2: `incomingCalls[]` / `ExpectedOutgoingCrossChainCall[]`) in which each reentrant frame carries its own flat sub-array — it does not thread scope arrays through nested calls and does not partition one shared array. Return data from a call is captured directly into the rolling hash via `CALL_END`; natural failures are captured via `success=false` in the same tag. `revertNextNCalls` is reserved for forced-revert spans where state must be rolled back even though the call(s) succeeded.
