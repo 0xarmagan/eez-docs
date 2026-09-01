@@ -25,15 +25,17 @@ const config = {
   },
 
   // Set the production url of your site here
-  url: 'https://eez-docs.vercel.app',
-  // Set the /<baseUrl>/ pathname under which your site is served
-  // For GitHub pages deployment, it is often '/<projectName>/'
-  baseUrl: '/',
+  url: 'https://0xarmagan.github.io',
+  // Served from GitHub Pages as a project site, so the repo name is the path
+  // prefix. Together with `url` above this must match the Pages URL exactly, or
+  // Docusaurus emits wrong canonical/sitemap links.
+  baseUrl: '/eez-docs/',
 
   // GitHub pages deployment config.
   // If you aren't using GitHub pages, you don't need these.
-  organizationName: 'eez-association', // Usually your GitHub org/user name.
-  projectName: 'eez-docs', // Usually your repo name.
+  organizationName: '0xarmagan', // repo owner — also the gh-pages deploy target
+  projectName: 'eez-docs',
+  trailingSlash: false,
 
   onBrokenLinks: 'throw',
 

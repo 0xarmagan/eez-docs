@@ -16,12 +16,12 @@ For the multi-prover design (batch shape, per-PS public-inputs construction, thr
 
 ## Sections
 
-- **[A. Data Model](./a-data-model)** — Core structs, storage layout, and transient execution variables.
-- **[B. Core Protocol Functions](./b-protocol-functions)** — Function-by-function reference for EEZ.sol, EEZL2.sol, and CrossChainProxy.sol.
-- **[C. Action Hash Computation](./c-action-hash)** — How crossChainCallHash is derived at every keying site.
-- **[D. Execution Model](./d-execution-model)** — Forward-scan entry consumption, flat calls, reentrant calls, and revert spans.
-- **[E. Rolling Hash](./e-rolling-hash)** — The integrity backbone: hash-chain semantics, static sub-hashes, worked examples.
-- **[F. Static Entry Resolution](./f-static-entry-resolution)** — How read-only cross-chain calls resolve against static entries.
-- **[G. Execution Entry Lifecycle](./g-entry-lifecycle)** — From L1 posting through L2 loading, consumption, and table clearing.
-- **[H. Invariants](./h-invariants)** — The nine invariants the protocol enforces on every batch.
-- **[I. Security Considerations](./i-security-considerations)** — Trust model, reentrancy, access control, and proxy identity.
+- **[A. Data Model](/spec/core-protocol/a-data-model)** — Core structs, storage layout, and transient execution variables.
+- **[B. Core Protocol Functions](/spec/core-protocol/b-protocol-functions)** — Function-by-function reference for EEZ.sol, EEZL2.sol, and CrossChainProxy.sol.
+- **[C. Action Hash Computation](/spec/core-protocol/c-action-hash)** — How crossChainCallHash is derived at every keying site.
+- **[D. Execution Model](/spec/core-protocol/d-execution-model)** — Forward-scan entry consumption, flat calls, reentrant calls, and revert spans.
+- **[E. Rolling Hash](/spec/core-protocol/e-rolling-hash)** — The integrity backbone: hash-chain semantics, static sub-hashes, worked examples.
+- **[F. Static Entry Resolution](/spec/core-protocol/f-static-entry-resolution)** — How read-only cross-chain calls resolve against static entries.
+- **[G. Execution Entry Lifecycle](/spec/core-protocol/g-entry-lifecycle)** — From L1 posting through L2 loading, consumption, and table clearing.
+- **[H. Invariants](/spec/core-protocol/h-invariants)** — The nine invariants the protocol enforces on every batch.
+- **[I. Security Considerations](/spec/core-protocol/i-security-considerations)** — Trust model, reentrancy, access control, and proxy identity.

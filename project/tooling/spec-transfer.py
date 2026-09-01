@@ -231,7 +231,7 @@ preamble = preamble.replace("\n---\n\n\n---\n", "\n---\n")
 
 toc = "## Sections\n\n"
 for letter, slug, full_title, _label, desc in SECTIONS:
-    toc += f"- **[{full_title}](./{slug})** — {desc}\n"
+    toc += f"- **[{full_title}](/spec/core-protocol/{slug})** — {desc}\n"
 
 index_body = (
     frontmatter(

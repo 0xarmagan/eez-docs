@@ -26,16 +26,17 @@ This command generates static content into the `build` directory and can be serv
 
 ## Deployment
 
-Using SSH:
+Deployment is automatic. Pushing to `main` triggers
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), which builds the
+site and publishes it to GitHub Pages:
 
-```bash
-USE_SSH=true yarn deploy
-```
+**https://0xarmagan.github.io/eez-docs/**
 
-Not using SSH:
+The build runs with `onBrokenLinks: 'throw'`, so a broken internal link fails the
+workflow instead of shipping. You can also trigger a deploy by hand from the
+repository's Actions tab.
 
-```bash
-GIT_USER=<Your GitHub username> yarn deploy
-```
-
-If you are using GitHub pages for hosting, this command is a convenient way to build the website and push to the `gh-pages` branch.
+The specification pages under `docs/spec/` are generated from
+[eez-core-protocol/docs](https://github.com/eez-association/eez-core-protocol/tree/main/docs)
+by `project/tooling/spec-transfer.py` — edit that script and re-run it rather than
+hand-editing those pages.
