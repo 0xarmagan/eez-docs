@@ -20,6 +20,8 @@ on another, so anything cross-chain today goes through a bridge: send a message,
 for it to arrive, handle the callback. One logical operation becomes two transactions
 with a gap in the middle.
 
+![Smart Contract A on Chain 1 calls Smart Contract B on Chain 2 and receives the return value in one operation — CALL and RETURN inside one zone, proxies, not bridges.](/img/what-is-eez.png)
+
 EEZ closes the gap. A cross-rollup call is an ordinary Ethereum `CALL` to a local
 address that stands in for the remote contract:
 
