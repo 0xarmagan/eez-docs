@@ -38,6 +38,9 @@ const config = {
   trailingSlash: false,
 
   onBrokenLinks: 'throw',
+  // Spec pages are regenerated from upstream; heading ids can drift between
+  // regenerations, so broken #anchors must fail the build like broken links do.
+  onBrokenAnchors: 'throw',
 
   markdown: {
     mermaid: true,
@@ -45,6 +48,19 @@ const config = {
   themes: ['@docusaurus/theme-mermaid'],
 
   clientModules: [require.resolve('./src/clientModules/mermaidWidthFix.js')],
+
+  plugins: [
+    [
+      require.resolve('@easyops-cn/docusaurus-search-local'),
+      /** @type {import('@easyops-cn/docusaurus-search-local').PluginOptions} */
+      ({
+        hashed: true, // cache-bust the index on rebuilds
+        docsRouteBasePath: '/', // docs are served from the site root
+        indexBlog: false,
+        language: ['en'],
+      }),
+    ],
+  ],
 
   // Even if you don't use internationalization, you can use this field to set
   // useful metadata like html lang. For example, if your site is Chinese, you

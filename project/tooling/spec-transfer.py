@@ -15,6 +15,11 @@ SITE = "/Users/armagan/eez-docs"
 OUT = os.path.join(SITE, "docs", "spec")
 UPSTREAM = "https://github.com/eez-association/eez-core-protocol/blob/main/docs"
 
+# The upstream commit these pages were generated from. Update alongside SRC
+# whenever the mirror is regenerated against a newer upstream.
+PIN_COMMIT = "9735f53"
+PIN_DATE = "2026-08-14"
+
 # ---------------------------------------------------------------- doc refs
 # Inline code-span references to sibling spec files -> real site links.
 DOC_LINKS = {
@@ -134,9 +139,16 @@ def frontmatter(title, sidebar_label, description, extra=""):
     )
 
 
-# Provenance is recorded in this generator and in the site's GitHub nav link,
-# not as a per-page banner.
+# Provenance is recorded once on the spec Overview page (PIN_NOTE below) and in
+# the site's GitHub nav link — not as a per-page banner.
 SOURCE_NOTE = ""
+
+PIN_NOTE = (
+    "*These pages mirror "
+    "[eez-core-protocol/docs](https://github.com/eez-association/eez-core-protocol/tree/main/docs) "
+    f"at commit [`{PIN_COMMIT}`](https://github.com/eez-association/eez-core-protocol/commit/{PIN_COMMIT}) "
+    f"({PIN_DATE}). The upstream repository is canonical.*\n\n"
+)
 
 
 def _motion_tag(clip, caption, alt):
@@ -241,6 +253,7 @@ index_body = (
         "execution model, invariants, and security considerations.",
         extra="slug: /spec/core-protocol/\n",
     )
+    + PIN_NOTE
     + SOURCE_NOTE
     + demote_headings(preamble).strip()
     + "\n\n"
