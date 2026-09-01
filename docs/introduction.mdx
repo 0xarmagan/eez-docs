@@ -7,32 +7,59 @@ slug: /
 
 import {Card, CardGrid} from '@site/src/components/Cards';
 
-**A contract on one rollup calls a contract on another and gets the return value in the same L1 block** — atomic cross-rollup composability, verified on-chain. No lock-and-mint bridges, oracles, or relayers in the path. See it in motion on the [Architecture](/architecture) page.
+**A contract on one rollup calls a contract on another and gets the return value in the same L1 block** — atomic cross-rollup composability, verified on-chain. No lock-and-mint bridges, oracles, or relayers in the path.
 
 :::caution
-Early-stage and **not audited** — interfaces and storage layout are still in flux. Not for production use.
+Early-stage and **currently in internal and external audit** — interfaces and storage layout are still in flux. Not for production use.
 :::
+
+## What is EEZ
+
+Ethereum's rollups each hold their own state. A contract on one cannot call a contract
+on another, so anything cross-chain today goes through a bridge: send a message, wait
+for it to arrive, handle the callback. One logical operation becomes two transactions
+with a gap in the middle.
+
+EEZ closes the gap. A cross-rollup call is an ordinary Ethereum `CALL` to a local
+address that stands in for the remote contract:
+
+```solidity
+// `counterProxy` stands in for a Counter contract on another rollup.
+uint256 value = ICounter(counterProxy).increment();
+```
+
+That works because the outcome is computed **before** the call runs. An off-chain
+prover works out what the call will do — which contracts run, what they return, how
+state changes — and posts it to L1 as a proved record. When the transaction executes,
+the protocol doesn't fetch anything from another chain: it replays the recorded calls
+and checks that reality matches the record. If it matches, the return value comes
+back in the same block. If anything differs, the whole call reverts.
+
+So, precisely: **EEZ does not move messages between chains — it verifies pre-computed
+outcomes.** That is why there is no bridge in the path and nothing to wait for. It
+relies on the rollups involved being [based rollups](/spec/core-protocol/) that share
+Ethereum's L1 sequencer, so their blocks are built together rather than independently.
+
+EEZ is not a bridge (nothing is locked, minted, or wrapped), not a messaging layer
+(no inbox to poll, no callback to handle), and not a rollup — it is a protocol that
+existing rollups adopt.
+
+The [specification](/spec/core-protocol/) covers the rest: the data model, the
+protocol functions, how outcomes are hashed and verified, and the invariants the
+protocol enforces.
 
 ## Get started
 
-Pick the path that matches what you're doing. New here? Start with the **Quickstart**.
+Pick the path that matches what you're doing.
 
 <CardGrid columns={3}>
   <Card to="/quickstart" icon="🧩" eyebrow="dApp developers" title="Build cross-rollup apps" cta="Start with the Quickstart">
     Write cross-chain logic — DEX liquidity, lending, flash loans — as naturally as a same-chain call. Deploy and run a cross-rollup hello world locally in ~15 minutes.
   </Card>
-  <Card to="/guides/register-rollup" icon="🛠" eyebrow="Rollup operators" title="Register your rollup" cta="Register Rollup">
+  <Card to="/register-rollup" icon="🛠" eyebrow="Rollup operators" title="Register your rollup" cta="Register Rollup">
     Expose your based rollup to the composability network so other rollups can call into it.
   </Card>
   <Card to="/architecture" icon="🔬" eyebrow="Protocol researchers" title="Study the design" cta="Read the Architecture">
-    A concrete implementation of synchronous composability and multi-prover verification to read and critique.
+    A concrete implementation of synchronous composability and multi-prover verification to read and critique, backed by the full protocol specification.
   </Card>
 </CardGrid>
-
-## How EEZ works
-
-Because [based rollups](/reference/glossary#based-rollup) share Ethereum's L1 sequencer, EEZ pre-computes a cross-rollup call's outcome off-chain, proves it on-chain, and executes it atomically:
-
-- **Post & verify** — a batch of [`ExecutionEntry`](/reference/glossary#executionentry) records (each committing to a full cross-rollup call: calls, returns, and state deltas) is posted to L1 via `postAndVerifyBatch` and verified by a per-rollup [multi-prover configuration](/concepts/multi-prover).
-- **Queue** — verified entries land in per-rollup queues as either [transient or deferred](/reference/glossary#transient-vs-deferred) work.
-- **Consume** — they execute in the same L1 block through [`CrossChainProxy`](/concepts/cross-chain-proxy) contracts that provide a stable, deterministic stand-in identity across chains (the destination sees the proxy's address as `msg.sender`, not the original caller's); every entry's [`rollingHash`](/concepts/rolling-hash) catches any deviation from the pre-committed execution.

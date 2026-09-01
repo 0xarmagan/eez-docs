@@ -1,0 +1,12 @@
+---
+title: "F. Static Entry Resolution"
+sidebar_label: "Static Entry Resolution"
+description: "How read-only cross-chain calls resolve against static entries."
+---
+
+Read-only cross-chain calls (and pre-verified reverting reentrant calls) are resolved from prover-supplied data — never executed via the normal call path. Two entry points:
+
+1. **`staticCrossChainCall`** (external view) — used when the proxy's `_fallback` detects a real STATICCALL context (a self-call to `staticCheck` whose `tstore` reverts). Inside an execution it scans the active entry's unified reentrant table with an `isStatic = true` key; outside, the top-level static-entry pool (L1: `proxyEntryHash` + `destinationRollupId` + live state-root pins, no block gate; L2: `proxyEntryHash` alone, same-block only).
+2. **Reverted-frame resolution inside `_consumeNestedCall`** — not a read, but the revert twin: a normal-CALL reentrant call matching a `success == false` row runs the frame and reverts with the cached payload (§D.3). It shares the unified table, keyed with `isStatic = false`.
+
+The full specification — match keys, resolution mechanics, static sub-calls, state-root pins, L1/L2 differences, invariants — lives in **[[`STATIC_ENTRY.md`](/spec/static-entries)](/spec/static-entries)**. Within this document: the `staticCrossChainCall` pseudocode is in §B.1, the untagged static accumulator in §E.2, and static key disambiguation in §E.4. For which structure models which situation, see [`EXECUTION_ENTRY_SPEC.md`](/spec/execution-entries) § "When to use which structure".

@@ -1,0 +1,187 @@
+---
+title: "E. Rolling Hash"
+sidebar_label: "Rolling Hash"
+description: "The integrity backbone: hash-chain semantics, static sub-hashes, worked examples."
+---
+
+A single `bytes32 rollingHash` per entry covers the entry's identity, its starting state context, every call result, and every nesting boundary. The five tag constants and the fold helpers (`_rollingHashEntryBegin` / `_rollingHashCallBegin` / `_rollingHashCallEnd` / `_rollingHashNestedBegin` / `_rollingHashNestedEnd` / `_rollingHashCallNotFound`) live on `EEZBase` and are **protocol constants shared by both chains** — the `CALL_*` / `NESTED_*` tags are the neutral rolling-hash frame vocabulary, not a direction.
+
+The accumulator is **seeded** at entry start (it must be `bytes32(0)` beforehand, else `RollingHashNotCleared`):
+
+```
+// L1 (_rollingHashEntryBegin): ordered (rollupId, currentState) state context, closed with identity
+seed         = keccak256(…keccak256(bytes32(0) ‖ rollupId_1 ‖ currentState_1)… ‖ rollupId_n ‖ currentState_n)
+_rollingHash = keccak256(abi.encodePacked(seed, proxyEntryHash))
+
+// L2 (_seedRollingHash): same formula with an empty state-delta prefix
+_rollingHash = keccak256(abi.encodePacked(bytes32(0), proxyEntryHash))
+```
+
+so the hash binds the entry's STARTING STATE + identity, not just call results (nested frames inherit it transitively). It is then updated at five tagged events (all `abi.encodePacked`):
+
+```
+CALL_BEGIN     = uint8(1)   _rollingHash = keccak256(_rollingHash ‖ CALL_BEGIN ‖ crossChainCallHash)
+CALL_END       = uint8(2)   _rollingHash = keccak256(_rollingHash ‖ CALL_END ‖ success ‖ retData)
+NESTED_BEGIN   = uint8(3)   _rollingHash = keccak256(_rollingHash ‖ NESTED_BEGIN ‖ crossChainCallHash)
+NESTED_END     = uint8(4)   _rollingHash = keccak256(_rollingHash ‖ NESTED_END)
+CALL_NOT_FOUND = uint8(5)   _rollingHash = keccak256(_rollingHash ‖ CALL_NOT_FOUND ‖ crossChainCallHash)
+```
+
+`CALL_BEGIN` binds the executed call's full identity (its seven-field `crossChainCallHash`, §C.5) so the hash commits to *which* call ran, not just its result. `NESTED_BEGIN` binds the reentrant call's identity the same way. **No call/frame index is folded in**: `_rollingHash` is a chain (each fold depends on the prior value), so order, count, and nesting are already bound by the chain + the tags; omitting an explicit index is also what lets a `revertNextNCalls` span be processed as a 0-based sub-slice without diverging the hash from a continuous run.
+
+`CALL_NOT_FOUND` is folded when a reentrant call finds no matching row in the unified table. The dedicated tag is distinct from `CALL_END(true, "")` (what the caller folds for a normal empty return), so a no-match can never be forged as one. The divergence is caught at the entry's rolling-hash check (surviving any intermediate try/catch and riding the `ContextResult` payload across a revert-span boundary), so no side flag is needed; a prover that deliberately pre-hashes the tag commits to a not-found at that exact position — a faithful outcome, not an attack.
+
+After all calls and nestings complete:
+
+```solidity
+require(_rollingHash == entry.rollingHash);   // RollingHashMismatch
+```
+
+A single mismatch anywhere in the execution tree changes the final hash — this catches:
+- Wrong return data for any call
+- Wrong success/failure flag
+- Missing or extra calls
+- A skipped or extra reentrant frame (missing/extra `NESTED_BEGIN`/`NESTED_END`)
+- Reordered operations
+- A reentrant call the table didn't expect (`CALL_NOT_FOUND`)
+
+## E.1 Rolling Hash and `revertNextNCalls`
+
+Inside a force-revert span, the inner self-call updates `_rollingHash` exactly as if the calls were normal (`CALL_BEGIN`/`CALL_END` for each, including failed ones). The `ContextResult` revert payload carries the post-span hash value back out, so the outer flow's rolling hash reflects that the span happened — even though the EVM rolled back the state changes the calls produced. This is essential: the proof's `rollingHash` must commit to the calls regardless of whether their state effects survived.
+
+The mechanism relies on EIP-1153 `tload` / `tstore` semantics:
+
+- `tload` is **read-only**, so it works inside a STATICCALL context **and** inside a self-call that is about to revert. The inner self-call therefore observes the outer `_rollingHash` and cursor values when it starts.
+- `tstore` writes are part of the EVM journal and are **rolled back** when the call frame reverts. So when `executeInContextAndRevert` reverts with `ContextResult`, every transient write performed inside the span (including the rolling-hash updates, the reentrant-cursor advances, and the `_entryEtherDelta` subtractions) is undone — except for the values that escape via the revert payload (the rolling hash and the reentrant cursor), which the caller manually re-applies after decoding.
+
+## E.2 Static Sub-Hash (`rollingHash` / `revertedOrStaticRollingHash`)
+
+Every static resolution carries its own expected hash — **a separate accumulator**, scoped to that static entry/row and computed over its read-only sub-call array. It is **not** the entry-level `_rollingHash`. The scheme is deliberately simpler and **untagged**, computed by `_processNStaticCalls`:
+
+```
+hash = bytes32(0)
+for cc in calls:
+    sourceProxy = computeCrossChainProxyAddress(cc.sourceAddress, cc.sourceRollupId)
+    (success, retData) = sourceProxy.staticcall(executeOnBehalf(cc.targetAddress, cc.gas, cc.data))
+    hash = keccak256(abi.encodePacked(hash, success, retData))
+require(hash == expected);   // RollingHashMismatch
+```
+
+The `expected` value is `StaticExecutionEntry.rollingHash` for a top-level static entry, or `ExpectedL1ToL2Call.revertedOrStaticRollingHash` for a static row inside the unified reentrant table.
+
+The differences from the entry-level scheme:
+
+- **No event tags** (no `CALL_BEGIN` / `CALL_END` / `NESTED_BEGIN` / `NESTED_END` domain bytes) and no call-identity folds.
+- **No nesting** at all — `_processNStaticCalls` does not handle reentrancy; STATICCALL forbids state writes, so the proxies' `executeOnBehalf` paths cannot reenter the manager's mutating entrypoints. A reentrant read during resolution re-enters `staticCrossChainCall` and resolves independently.
+- **No proxy creation and no `revertNextNCalls`** — nothing mutates.
+
+This simpler schema is safe because the surrounding key already pins the context that tagged events disambiguate at entry level: a nested static row is content-addressed by `keccak256(crossChainCallHash, _rollingHash-at-fire-point)` within its entry, and a top-level static entry by `proxyEntryHash` + queue routing + (L1) the `expectedStateRoots[]` pins. The only thing left for the static hash to commit to is the **outcome of the read-only sub-calls, in order**, which is exactly what the untagged `keccak256(prev, success, retData)` chain captures. There is also no cross-contamination with the entry-level accumulator: `_processNStaticCalls` returns a local hash and never reads or writes `_rollingHash`.
+
+Note the distinction inside the unified table: a **static** row's sub-array runs via STATICCALL under the untagged schema, while a **reverted call** row's sub-array runs as real calls under the tagged entry schema (its `revertedOrStaticRollingHash` is compared against the live `_rollingHash` at the end of the frame, which was seeded from the host hash at `NESTED_BEGIN`). The `isStatic` bit folded into `crossChainCallHash` decides which resolution path can reach the row.
+
+## E.3 Worked Hash Chain Example
+
+Setup (L1 names; the L2 chain is identical with `incomingCalls` / `expectedOutgoingCalls` / `_lastOutgoingCallConsumed` and the delta-less seed):
+
+```
+entry.stateUpdates         = [ d0 ]
+entry.proxyEntryHash      = P
+entry.l2ToL1Calls         = [c0, c1]           // top-level calls
+entry.expectedL1ToL2Calls = [ R0 ]
+R0 = { expectedL1toL2Hash = keccak256(H_nested ‖ S1),   // computed by the prover in simulation
+       l2ToL1Calls        = [n0],                        // the frame's own sub-call
+       success            = true,
+       returnData         = 0xaa }
+entry.rollingHash         = <expected final hash>
+```
+
+While c0 executes, the destination contract re-enters a proxy with reentrant call hash `H_nested`; the frame runs `n0`, then returns `0xaa`.
+
+Step-by-step:
+
+```
+Seed:
+  seed = keccak256(bytes32(0) ‖ d0.rollupId ‖ d0.currentState)
+  S0   = keccak256(seed ‖ P)                                 // _rollingHashEntryBegin
+  _lastL1ToL2CallConsumed = 0
+
+─── _processNCalls([c0, c1]), i = 0 ─────────────
+
+  hash CALL_BEGIN with c0's identity hash ccHash(c0):
+    S1 = keccak256(S0 ‖ uint8(1) ‖ ccHash(c0))
+
+  Execute c0 via the source proxy. During c0, the destination re-enters a proxy
+  → executeCrossChainCall → _insideExecution() == true → _consumeNestedCall(H_nested):
+
+      key = keccak256(H_nested ‖ S1)                          // live _rollingHash is S1
+      forward scan from cursor 0 → matches R0.expectedL1toL2Hash
+      _lastL1ToL2CallConsumed = 1                             // advanced BEFORE the frame runs
+
+      hash NESTED_BEGIN(H_nested):
+        S2 = keccak256(S1 ‖ uint8(3) ‖ H_nested)
+
+      _processNCalls([n0]):                                   // the frame's OWN sub-array
+        hash CALL_BEGIN(ccHash(n0)):
+          S3 = keccak256(S2 ‖ uint8(1) ‖ ccHash(n0))
+        Execute n0. Succeeds with retData_n0.
+        hash CALL_END(true, retData_n0):
+          S4 = keccak256(S3 ‖ uint8(2) ‖ true ‖ retData_n0)
+
+      hash NESTED_END:
+        S5 = keccak256(S4 ‖ uint8(4))
+
+      return R0.returnData (0xaa) to the destination
+
+  c0's proxy call returns. Proxy reports success and retData_0.
+  hash CALL_END(true, retData_0):
+    S6 = keccak256(S5 ‖ uint8(2) ‖ true ‖ retData_0)
+
+─── _processNCalls([c0, c1]), i = 1 ─────────────
+
+  hash CALL_BEGIN(ccHash(c1)):
+    S7 = keccak256(S6 ‖ uint8(1) ‖ ccHash(c1))
+  Execute c1. Succeeds with retData_1.
+  hash CALL_END(true, retData_1):
+    S8 = keccak256(S7 ‖ uint8(2) ‖ true ‖ retData_1)
+
+─── Verification ─────────────
+
+  _rollingHash (S8) == entry.rollingHash    → RollingHashMismatch?   no
+  ether invariant: totalEtherDelta == _entryEtherDelta               (L1)
+  _rollingHash reset to 0; allowed-rollups set deleted
+```
+
+Hash chain summary:
+
+```
+S0 = keccak(keccak(0 ‖ rid ‖ currentState) ‖ P)
+S1 = keccak(S0 ‖ CALL_BEGIN   ‖ ccHash(c0))
+S2 = keccak(S1 ‖ NESTED_BEGIN ‖ H_nested)
+S3 = keccak(S2 ‖ CALL_BEGIN   ‖ ccHash(n0))
+S4 = keccak(S3 ‖ CALL_END     ‖ true ‖ retData_n0)
+S5 = keccak(S4 ‖ NESTED_END)
+S6 = keccak(S5 ‖ CALL_END     ‖ true ‖ retData_0)
+S7 = keccak(S6 ‖ CALL_BEGIN   ‖ ccHash(c1))
+S8 = keccak(S7 ‖ CALL_END     ‖ true ‖ retData_1)
+
+require(S8 == entry.rollingHash)
+```
+
+## E.4 Multiple Reads Within One Call (Static Disambiguation)
+
+A single call iteration can issue several STATICCALLs at distinct points of its execution, possibly with the same `crossChainCallHash`. The disambiguating coordinate is the live `_rollingHash` folded into each row's position key: any state-affecting event between two reads (a `CALL_BEGIN`/`CALL_END`, a nested frame, a `CALL_NOT_FOUND`) changes `_rollingHash`, so the two reads compute different keys and match different rows.
+
+Example: while `entry.l2ToL1Calls[0]` executes (live hash `S1` after its `CALL_BEGIN`), the destination contract:
+
+```
+STATICCALL to proxy → staticCrossChainCall
+  → key = keccak256(H_read ‖ S1) → matches the row the prover stamped for this point
+
+Trigger reentrant call (a successful reentrant frame)
+  → _consumeNestedCall matches at key keccak256(H_nested ‖ S1); the frame's folds move the hash to S5
+
+STATICCALL to proxy → staticCrossChainCall
+  → key = keccak256(H_read ‖ S5) → a DIFFERENT row, even for the same H_read
+```
+
+Two reads with the same `crossChainCallHash` and **no** intervening fold compute the same key and match the same row — which is deterministic and correct: with no state event in between, the read must observe the same result. The builder records the live `_rollingHash` at the exact point of each STATICCALL during simulation and stamps `keccak256(crossChainCallHash, thatHash)` into the corresponding table row. Note the forward-scan window also applies: a static row must be placed at an index `>= _lastL1ToL2CallConsumed` at read time (§D.3.1) — a read does not advance the cursor, so consecutive reads can share the window.

@@ -1,0 +1,27 @@
+---
+title: "Core Protocol Specification"
+sidebar_label: "Overview"
+description: "Formal reference for the EEZ core protocol: data model, functions, hashing, execution model, invariants, and security considerations."
+slug: /spec/core-protocol/
+---
+
+**Source**: `src/`
+**Purpose**: Formal reference for implementing the Rust rollup node. Supersedes informal comments in source code.
+
+This document covers the **flat sequential execution model** layered with the **multi-prover / per-rollup-queue** model. Every cross-chain entry carries a flat list of top-level calls processed sequentially; each reentrant frame carries its **own** flat sub-array; reentrant calls resolve against a single unified expected-calls table content-addressed by the live rolling hash; and integrity is verified by a single `rollingHash` per entry. The execution structs are split per side: L1 (`src/interfaces/IEEZ.sol`) uses absolute directional names (`L2ToL1Call` / `l2ToL1Calls`, `ExpectedL1ToL2Call` / `expectedL1ToL2Calls`); L2 (`src/interfaces/IEEZL2.sol`) uses **self-relative** directional names (`CrossChainCall` / `incomingCalls`, `ExpectedOutgoingCrossChainCall` / `expectedOutgoingCalls`) because an L2's counterparty can be L1 OR another L2 — see §A.1. Entries are routed by `destinationRollupId` into per-rollup queues on L1. `postAndVerifyBatch` carries a single `ProofSystemBatchPerVerificationEntries` whose proofs verify atomically.
+
+For the multi-prover design (batch shape, per-PS public-inputs construction, threshold semantics), see [`MULTI_PROVER_SPEC.md`](/spec/multi-prover).
+
+---
+
+## Sections
+
+- **[A. Data Model](./a-data-model)** — Core structs, storage layout, and transient execution variables.
+- **[B. Core Protocol Functions](./b-protocol-functions)** — Function-by-function reference for EEZ.sol, EEZL2.sol, and CrossChainProxy.sol.
+- **[C. Action Hash Computation](./c-action-hash)** — How crossChainCallHash is derived at every keying site.
+- **[D. Execution Model](./d-execution-model)** — Forward-scan entry consumption, flat calls, reentrant calls, and revert spans.
+- **[E. Rolling Hash](./e-rolling-hash)** — The integrity backbone: hash-chain semantics, static sub-hashes, worked examples.
+- **[F. Static Entry Resolution](./f-static-entry-resolution)** — How read-only cross-chain calls resolve against static entries.
+- **[G. Execution Entry Lifecycle](./g-entry-lifecycle)** — From L1 posting through L2 loading, consumption, and table clearing.
+- **[H. Invariants](./h-invariants)** — The nine invariants the protocol enforces on every batch.
+- **[I. Security Considerations](./i-security-considerations)** — Trust model, reentrancy, access control, and proxy identity.
