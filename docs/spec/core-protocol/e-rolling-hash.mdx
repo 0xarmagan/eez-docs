@@ -9,8 +9,8 @@ A single `bytes32 rollingHash` per entry covers the entry's identity, its starti
 The accumulator is **seeded** at entry start (it must be `bytes32(0)` beforehand, else `RollingHashNotCleared`):
 
 ```
-// L1 (_rollingHashEntryBegin): ordered (rollupId, currentState) state context, closed with identity
-seed         = keccak256(…keccak256(bytes32(0) ‖ rollupId_1 ‖ currentState_1)… ‖ rollupId_n ‖ currentState_n)
+// L1 (_rollingHashEntryBegin): ordered (rollupId, currentRoot) state context, closed with identity
+seed         = keccak256(…keccak256(bytes32(0) ‖ rollupId_1 ‖ currentRoot_1)… ‖ rollupId_n ‖ currentRoot_n)
 _rollingHash = keccak256(abi.encodePacked(seed, proxyEntryHash))
 
 // L2 (_seedRollingHash): same formula with an empty state-delta prefix
@@ -75,7 +75,7 @@ The differences from the entry-level scheme:
 - **No nesting** at all — `_processNStaticCalls` does not handle reentrancy; STATICCALL forbids state writes, so the proxies' `executeOnBehalf` paths cannot reenter the manager's mutating entrypoints. A reentrant read during resolution re-enters `staticCrossChainCall` and resolves independently.
 - **No proxy creation and no `revertNextNCalls`** — nothing mutates.
 
-This simpler schema is safe because the surrounding key already pins the context that tagged events disambiguate at entry level: a nested static row is content-addressed by `keccak256(crossChainCallHash, _rollingHash-at-fire-point)` within its entry, and a top-level static entry by `proxyEntryHash` + queue routing + (L1) the `expectedStateRoots[]` pins. The only thing left for the static hash to commit to is the **outcome of the read-only sub-calls, in order**, which is exactly what the untagged `keccak256(prev, success, retData)` chain captures. There is also no cross-contamination with the entry-level accumulator: `_processNStaticCalls` returns a local hash and never reads or writes `_rollingHash`.
+This simpler schema is safe because the surrounding key already pins the context that tagged events disambiguate at entry level: a nested static row is content-addressed by `keccak256(crossChainCallHash, _rollingHash-at-fire-point)` within its entry, and a top-level static entry by `proxyEntryHash` + queue routing + (L1) the `expectedRoots[]` pins. The only thing left for the static hash to commit to is the **outcome of the read-only sub-calls, in order**, which is exactly what the untagged `keccak256(prev, success, retData)` chain captures. There is also no cross-contamination with the entry-level accumulator: `_processNStaticCalls` returns a local hash and never reads or writes `_rollingHash`.
 
 Note the distinction inside the unified table: a **static** row's sub-array runs via STATICCALL under the untagged schema, while a **reverted call** row's sub-array runs as real calls under the tagged entry schema (its `revertedOrStaticRollingHash` is compared against the live `_rollingHash` at the end of the frame, which was seeded from the host hash at `NESTED_BEGIN`). The `isStatic` bit folded into `crossChainCallHash` decides which resolution path can reach the row.
 
@@ -84,7 +84,7 @@ Note the distinction inside the unified table: a **static** row's sub-array runs
 Setup (L1 names; the L2 chain is identical with `incomingCalls` / `expectedOutgoingCalls` / `_lastOutgoingCallConsumed` and the delta-less seed):
 
 ```
-entry.stateUpdates         = [ d0 ]
+entry.rollupUpdates         = [ d0 ]
 entry.proxyEntryHash      = P
 entry.l2ToL1Calls         = [c0, c1]           // top-level calls
 entry.expectedL1ToL2Calls = [ R0 ]
@@ -101,7 +101,7 @@ Step-by-step:
 
 ```
 Seed:
-  seed = keccak256(bytes32(0) ‖ d0.rollupId ‖ d0.currentState)
+  seed = keccak256(bytes32(0) ‖ d0.rollupId ‖ d0.currentRoot)
   S0   = keccak256(seed ‖ P)                                 // _rollingHashEntryBegin
   _lastL1ToL2CallConsumed = 0
 
@@ -154,7 +154,7 @@ Seed:
 Hash chain summary:
 
 ```
-S0 = keccak(keccak(0 ‖ rid ‖ currentState) ‖ P)
+S0 = keccak(keccak(0 ‖ rid ‖ currentRoot) ‖ P)
 S1 = keccak(S0 ‖ CALL_BEGIN   ‖ ccHash(c0))
 S2 = keccak(S1 ‖ NESTED_BEGIN ‖ H_nested)
 S3 = keccak(S2 ‖ CALL_BEGIN   ‖ ccHash(n0))

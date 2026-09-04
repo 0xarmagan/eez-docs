@@ -11,7 +11,7 @@ Entries in `verificationByRollup[rid].entryQueue` (or `_transientEntries` during
 ```
 entry.proxyEntryHash      == crossChainCallHash        // identity
 entry.destinationRollupId == destRid                   // routing
-every stateUpdates[i].currentState == live root         // state preconditions
+every rollupUpdates[i].currentRoot == live root         // state preconditions
 ```
 
 The cursor is then set to `matchIndex + 1`. A non-matching entry (wrong hash, wrong routing, stale state) is **skipped**, not reverted on; the scan reverts `ExecutionNotFound` only at the end of the queue. A consumed entry with `success == false` runs, verifies, then reverts with its `returnData` — rolling back the cursor advance — so it is re-callable and only drops out of reach once a later successful consumption advances past it. There is no swap-and-pop.
@@ -62,7 +62,7 @@ When a reentrant row at index `i` is resolved (`_resolveNestedReentrant`), the c
 4. The caller decodes `ContextResult` and writes the rolling hash and reentrant cursor back into transient storage. A reentrant no-match observed inside the span was folded into that rolling hash (`CALL_NOT_FOUND`), so it still surfaces at the entry boundary. The rolling hash now reflects what happened inside the span even though the EVM rolled the state back.
 5. The caller emits `CallsReverted(entryIndex, start, n)` and skips its local index past the span.
 
-A single mechanism handles atomic rollback: there are no continuation entries, no per-rollup state-root restoration, no scope tree to navigate. The "what happened" is encoded by the calls in the span; the "what state survives" is whatever the EVM rolled back.
+A single mechanism handles atomic rollback: there are no continuation entries, no per-rollup root restoration, no scope tree to navigate. The "what happened" is encoded by the calls in the span; the "what state survives" is whatever the EVM rolled back.
 
 ### D.4.1 When to use `revertNextNCalls` (and when not to)
 

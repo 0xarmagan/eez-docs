@@ -167,7 +167,7 @@ back. Here is what runs on each side.
 **On L1:**
 
 1. Off-chain, the outcome is pre-computed as a single deferred `ExecutionEntry`
-   carrying `returnData = abi.encode(uint256(1))` and a `StateUpdate` that advances
+   carrying `returnData = abi.encode(uint256(1))` and a `RollupUpdate` that advances
    L2's state root. `postAndVerifyBatch` verifies the proof and loads it into L2's
    queue.
 2. A user calls `CounterAndProxy.incrementProxy()`.
@@ -175,7 +175,7 @@ back. Here is what runs on each side.
 4. The proxy forwards to `EEZ.executeCrossChainCall`. The registry computes the
    call's `crossChainCallHash` from its seven fields — `isStatic`, source address,
    source rollup, target address, target rollup, value, and calldata — matches it
-   against `entry.proxyEntryHash`, checks each `StateUpdate`'s `currentState`
+   against `entry.proxyEntryHash`, checks each `RollupUpdate`'s `currentRoot`
    against the live root, verifies the rolling hash, applies the state delta, and
    returns `entry.returnData`.
 5. `CounterAndProxy` receives `1`. The registry's stored root for L2 has advanced.
@@ -197,4 +197,4 @@ the identical `crossChainCallHash` preimage, which is what binds the L1 side's c
 returned anything other than `1`, its rolling hash would differ and the entry would
 fail.
 
-Both sides happen in the same L1 block. The L2 state root committed in the L1 entry's `StateUpdate` is the ground truth — the L2 execution is the deterministic consequence of the pre-committed state transition.
+Both sides happen in the same L1 block. The L2 state root committed in the L1 entry's `RollupUpdate` is the ground truth — the L2 execution is the deterministic consequence of the pre-committed state transition.

@@ -4,25 +4,25 @@ sidebar_label: "Invariants"
 description: "The nine invariants the protocol enforces on every batch."
 ---
 
-## H.1 State Root Consistency (L1)
+## H.1 Root Consistency (L1)
 
-`rollups[id].stateRoot` is updated only:
-- By `_applyStateUpdates` (during `_executeEntry`, reached from `postAndVerifyBatch`'s immediate run, the meta hook, `executeCrossChainCall`, or `executeL2Txs`).
-- By `setStateRoot(rid, newRoot)` from the rollup's manager (subject to the same-block lockout and the mid-execution guard).
+`rollups[id].root` is updated only:
+- By `_applyRollupUpdates` (during `_executeEntry`, reached from `postAndVerifyBatch`'s immediate run, the meta hook, `executeCrossChainCall`, or `executeL2Txs`).
+- By `setRoot(rid, newRoot)` from the rollup's manager (subject to the same-block lockout and the mid-execution guard).
 
-The previous-state binding lives on the entry: `StateUpdate.currentState` is checked both as part of the consumption match (`_entryMatches`) and as a hard gate at `_executeEntry` start (`StateRootMismatch(id)` — the gate that covers the immediate L2Tx path, which doesn't pass through `_entryMatches`). `newState` applies only **after** the entry's calls, so mid-execution reads see the pre-state. The proof itself binds to the FULL `ExecutionEntry` struct (including `stateUpdates`), so a stale builder either fails proof verification or fails the on-chain `currentState` match. This dual binding is the per-rollup-queue model's soundness backstop.
+The previous-state binding lives on the entry: `RollupUpdate.currentRoot` is checked both as part of the consumption match (`_entryMatches`) and as a hard gate at `_executeEntry` start (`RootMismatch(id)` — the gate that covers the immediate L2Tx path, which doesn't pass through `_entryMatches`). `newRoot` applies only **after** the entry's calls, so mid-execution reads see the pre-state. The proof itself binds to the FULL `ExecutionEntry` struct (including `rollupUpdates`), so a stale builder either fails proof verification or fails the on-chain `currentRoot` match. This dual binding is the per-rollup-queue model's soundness backstop.
 
 ## H.2 Ether Accounting (L1)
 
-For each entry: `totalEtherDelta == _entryEtherDelta`, where `totalEtherDelta` is the sum of the entry's `stateUpdates[].etherDelta` and `_entryEtherDelta` is the entry's net physical flow — ALL `msg.value` received via `executeCrossChainCall` during the entry (the entry-point call's value plus every reentrant call's; 0 for `executeL2Txs` and immediate entries unless reentrant receipts occur) MINUS the `value` of every **successful** non-static outbound call. Calls inside a `revertNextNCalls` span contribute to neither side — their ETH transfers and their `_entryEtherDelta` subtractions are rolled back by the span's revert, even though the rolling hash still records them as successful.
+For each entry: `totalEtherDelta == _entryEtherDelta`, where `totalEtherDelta` is the sum of the entry's `rollupUpdates[].etherDelta` and `_entryEtherDelta` is the entry's net physical flow — ALL `msg.value` received via `executeCrossChainCall` during the entry (the entry-point call's value plus every reentrant call's; 0 for `executeL2Txs` and immediate entries unless reentrant receipts occur) MINUS the `value` of every **successful** non-static outbound call. Calls inside a `revertNextNCalls` span contribute to neither side — their ETH transfers and their `_entryEtherDelta` subtractions are rolled back by the span's revert, even though the rolling hash still records them as successful.
 
 Each entry independently balances — ether accounting is localized to a single entry rather than aggregated across the transaction — which simplifies the prover's job.
 
-The sum of `etherBalance` across all rollups plus the `EEZ` contract's own balance is conserved modulo direct deposits/withdrawals outside the protocol. (On L2 there is no ether accounting: inbound `executeCrossChainCall` value is forwarded to `SYSTEM_ADDRESS` — a burn — and `executeIncomingCrossChainCall` mints exactly `value` via `msg.value`.)
+The sum of `etherBalance` across all rollups plus the `EEZ` contract's own balance is conserved modulo direct deposits/withdrawals outside the protocol. (On L2 there is no ether accounting: inbound `executeCrossChainCall` value is forwarded to `SYSTEM_ADDRESS` — a burn — and `executeIncomingCrossChainCall` / `loadExecutionTable` mint via `msg.value` the ether the committed incoming calls consume; a prover constraint on both — consumption may be partial, so no balance check.)
 
 ## H.3 Forward-Scan Consumption
 
-Each entry is consumed at most once, in forward order **on its destination rollup**. Each rollup has its own monotonically-advancing `entryQueueIndex` that is reset to 0 by every batch that verifies the rollup (wipe-on-verify). Cross-rollup state is independent. Skipped entries never execute; anything depending on one later fails its own `currentState` check.
+Each entry is consumed at most once, in forward order **on its destination rollup**. Each rollup has its own monotonically-advancing `entryQueueIndex` that is reset to 0 by every batch that verifies the rollup (wipe-on-verify). Cross-rollup state is independent. Skipped entries never execute; anything depending on one later fails its own `currentRoot` check.
 
 ## H.4 Rolling Hash Integrity
 
@@ -53,10 +53,10 @@ All execution entries posted in a given block must be consumed in that block —
 
 ## H.8 Per-Rollup Queue Soundness
 
-The deferred remainder of a `postAndVerifyBatch` is published unconditionally to per-rollup queues. Partial transient drain does not drop persistent entries; the soundness backstop is `StateUpdate.currentState`, checked at consumption. Entries whose recorded pre-state doesn't match the on-chain state at consumption are skipped by the match scan and, if reached directly (immediate path), revert `StateRootMismatch`.
+The deferred remainder of a `postAndVerifyBatch` is published unconditionally to per-rollup queues. Partial transient drain does not drop persistent entries; the soundness backstop is `RollupUpdate.currentRoot`, checked at consumption. Entries whose recorded pre-state doesn't match the on-chain state at consumption are skipped by the match scan and, if reached directly (immediate path), revert `RootMismatch`.
 
 ## H.9 Reentry Guard for `postAndVerifyBatch`
 
 `postAndVerifyBatch` re-entered from any path reverts `PostBatchReentry` — the guard is `_insideExecution() || _transientEntries.length != 0` at the top of the function (there is no separate `_inPostBatch` flag). The two terms cover every window in which a state-mutating external call is in flight: `_insideExecution()` during the immediate L2Tx run and any executing entry, `_transientEntries.length != 0` during the meta hook. The remaining external calls before the immediate run (`checkProofSystemsAndGetVkeys`, `getCustomData`, `verify`) are all `view`/STATICCALL, so a reentrant batch (which SSTOREs immediately) can't survive there regardless.
 
-Same-block re-touch of a rollup across separate (non-nested) `postAndVerifyBatch` calls is **permitted**: `_markVerifiedBlockAndDeletePreviousEntries` wipes the rollup's queue and cursor on every verify, so the second batch's entries REPLACE the first batch's. Safe because state only mutates at consumption and every entry is gated by `StateUpdate.currentState` — discarding unconsumed-but-proven entries is a liveness choice, not a safety one.
+Same-block re-touch of a rollup across separate (non-nested) `postAndVerifyBatch` calls is **permitted**: `_markVerifiedBlockAndDeletePreviousEntries` wipes the rollup's queue and cursor on every verify, so the second batch's entries REPLACE the first batch's. Safe because state only mutates at consumption and every entry is gated by `RollupUpdate.currentRoot` — discarding unconsumed-but-proven entries is a liveness choice, not a safety one.
