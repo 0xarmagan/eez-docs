@@ -8,7 +8,7 @@ description: "Trust model, reentrancy, access control, and proxy identity."
 
 `postAndVerifyBatch` verifies one proof per `(batch, proofSystem)` pair. Each proof's public-inputs hash covers (see [`MULTI_PROVER_SPEC.md`](/spec/multi-prover) for the exact construction):
 
-- Every entry hash — `keccak256(abi.encode(entry))` over the FULL `ExecutionEntry` struct (including `stateUpdates` with `currentState`, `proxyEntryHash`, `l2ToL1Calls`, the unified `expectedL1ToL2Calls`, `rollingHash`, `destinationRollupId`, `success`, `returnData`).
+- Every entry hash — `keccak256(abi.encode(entry))` over the FULL `ExecutionEntry` struct (including `rollupUpdates` with `currentRoot`, `proxyEntryHash`, `l2ToL1Calls`, the unified `expectedL1ToL2Calls`, `rollingHash`, `destinationRollupId`, `success`, `returnData`).
 - Every static-entry hash — `keccak256(abi.encode(staticEntry))`.
 - Every selected blob hash (for data availability).
 - Per-rollup `customData` blob fetched via `IRollupContract.getCustomData(batch.blockNumber)` (rollup-defined L1-view commitment), hashed keyed by rollupId and bound into `sharedPublicInput` (shared across all PS, not per-PS).
@@ -28,10 +28,10 @@ The protocol is intentionally reentrant. `_processNCalls` calls into proxies, wh
 
 ## I.3 Untrusted Meta Hook
 
-`postAndVerifyBatch` invokes `IMetaCrossChainReceiver(msg.sender).executeMetaCrossChainTransactions()` when non-L2Tx immediate entries remain and `msg.sender` has code. The hook is untrusted — it may revert, consume some entries, ignore the call, or attempt to re-enter `postAndVerifyBatch`. The protocol's defense:
+`postAndVerifyBatch` invokes `IMetaCrossChainReceiver(msg.sender).executeMetaCrossChainTransactions()` when non-L2Tx immediate entries remain (a codeless sender reverts `MetaEntriesWithoutReceiver` — the never-persisted prefix would be silently dropped). The hook is untrusted — it may revert, consume some entries, ignore the call, or attempt to re-enter `postAndVerifyBatch`. The protocol's defense:
 
 - **Re-entry**: blocked by `PostBatchReentry` — see §H.9 / I.2.
-- **Partial consumption**: the persistent remainder is published anyway; `StateUpdate.currentState` is the soundness backstop at consumption time.
+- **Partial consumption**: the persistent remainder is published anyway; `RollupUpdate.currentRoot` is the soundness backstop at consumption time.
 - **Hook revert**: the entire `postAndVerifyBatch` reverts (atomicity), which rolls back every write — `lastVerifiedBlock`, the queue wipes, the immediate entries, the transient stream. The next caller can re-attempt cleanly.
 
 ## I.4 Access Control Summary
@@ -46,7 +46,7 @@ The protocol is intentionally reentrant. `_processNCalls` calls into proxies, wh
 | `executeInContextAndRevert` (L1 / L2) | Self-call only (`address(this)`) |
 | `_attemptExecuteImmediateL2Txs(entry)` (L1, `public`) | Self-call only (`address(this)`) |
 | `createCrossChainProxy` (L1 / L2) | Anyone (subject to `SameNetworkProxy`) |
-| `setStateRoot(rid, newRoot)` (L1) | Current `rollups[rid].rollupContract` (subject to same-block lockout AND `SetStateRootNotAllowedDuringExecution`) |
+| `setRoot(rid, newRoot)` (L1) | Current `rollups[rid].rollupContract` (subject to same-block lockout AND `SetRootNotAllowedDuringExecution`) |
 | `loadExecutionTable` (L2) | `SYSTEM_ADDRESS` |
 | `executeIncomingCrossChainCall(...)` (L2) | `SYSTEM_ADDRESS` |
 
@@ -84,8 +84,8 @@ No path exists where execution diverges from the proof and still completes succe
 
 Every proxy an entry can drive must be backed by a rollup the entry actually proved:
 
-- **Validation-time (batch)**: every entry's `destinationRollupId` and every flat call's `sourceRollupId` (top-level + each reentrant frame's sub-calls) must be ∈ the entry's `stateUpdates` rollups (`EntryDestinationNotInStateUpdates` / `CallSourceNotVerified`); every static entry's `destinationRollupId` and sub-call sources must be ∈ its `expectedStateRoots` pins (`StaticEntryDestinationNotPinned` / `CallSourceNotVerified`).
-- **Runtime**: reentrant / static-read TARGETS carry no clear-text rollup field at post time, so `_consumeNestedCall` and `staticCrossChainCall` check the calling proxy's rollup against the executing entry's allowed set `_verifiedRollupInCurrentExecutingEntry` (its `stateUpdates` rollupIds) — `ReentrantDestinationNotVerified` on failure.
+- **Validation-time (batch)**: every entry's `destinationRollupId` and every flat call's `sourceRollupId` (top-level + each reentrant frame's sub-calls) must be ∈ the entry's `rollupUpdates` rollups (`EntryDestinationNotInRollupUpdates` / `CallSourceNotVerified`); every static entry's `destinationRollupId` and sub-call sources must be ∈ its `expectedRoots` pins (`StaticEntryDestinationNotPinned` / `CallSourceNotVerified`).
+- **Runtime**: reentrant / static-read TARGETS carry no clear-text rollup field at post time, so `_consumeNestedCall` and `staticCrossChainCall` check the calling proxy's rollup against the executing entry's allowed set `_verifiedRollupInCurrentExecutingEntry` (its `rollupUpdates` rollupIds) — `ReentrantDestinationNotVerified` on failure.
 
 Together these ensure a batch cannot use a proxy of a rollup it did not verify, in any position of the execution tree. L2 has no equivalent (single rollup, trusted system-loaded tables).
 

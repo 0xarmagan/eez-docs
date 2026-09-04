@@ -2,7 +2,7 @@
 """Transfer eez-core-protocol/docs specs into the eez-docs Docusaurus site.
 
 Source of truth: https://github.com/eez-association/eez-core-protocol/tree/main/docs
-Pinned at upstream commit 9735f53 (2026-08-14).
+Pinned at upstream commit a7a0d7e (2026-09-03).
 
 Re-runnable: wipes docs/spec/ and regenerates it from /tmp/eez-core-docs.
 """
@@ -17,7 +17,7 @@ UPSTREAM = "https://github.com/eez-association/eez-core-protocol/blob/main/docs"
 
 # The upstream commit these pages were generated from. Update alongside SRC
 # whenever the mirror is regenerated against a newer upstream.
-PIN_COMMIT = "9735f53"
+PIN_COMMIT = "a7a0d7e"
 PIN_DATE = "2026-08-14"
 
 # ---------------------------------------------------------------- doc refs

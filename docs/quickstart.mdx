@@ -58,7 +58,7 @@ bash script/e2e/run/local-parallel.sh
 ```
 
 Each argument may be a **scenario name** (`counter`), a **category** (`one_way`,
-`multi_call`, `multi_tx`, `nested`, `reentrant`, `revert`), or a
+`multi_call`, `multi_tx`, `nested`, `reentrant`, `revert`, `static`), or a
 **category/direction** (`one_way/L2_to_L1`). Categories expand to every scenario
 beneath them, and scenarios run in parallel:
 
@@ -111,7 +111,9 @@ Each scenario is a worked instance of a flow pattern from the
 | `flash-loan` | borrow, use, and repay across chains in one block |
 | `multi-call-twice` / `multi-call-two-diff` | several top-level calls in one entry |
 | `counter-multi-tx` | multiple transactions in one block |
-| `revertCounter` / `revertContinue` | forced reverts via `revertNextNCalls` |
+| `revertCounter` | forced reverts via `revertNextNCalls` |
+| `revertFromOtherChain` | a revert initiated on the remote chain |
+| `topLevelStaticCounter` / `nestedStaticCounter` | read-only cross-chain calls (static entries) |
 | `nestedCallRevert` | a reverting reentrant frame (`success = false`) |
 
 `L2` and `L2`-suffixed variants run the mirrored direction. Read a scenario's

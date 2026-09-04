@@ -18,7 +18,7 @@ The sites differ only in the `callGas` value they fold:
 | Matching site | `callGas` folded |
 |---|---|
 | Everything on L1 (entry points, flat calls, reentrant rows, static) | `0` (`ZERO_CALL_GAS`) |
-| L2 inbound binding (`executeIncomingCrossChainCall` vs `entries[0].proxyEntryHash`) | `0` (`ZERO_CALL_GAS`) |
+| L2 inbound binding (`executeIncomingCrossChainCall` vs `entries[0].proxyEntryHash`) | `incomingCalls[0].gas` |
 | L2 flat-call `CALL_BEGIN` folds (§C.5) | `0` (`ZERO_CALL_GAS`) |
 | L2 static matching (`staticCrossChainCall`, both branches) | `0` (`ZERO_CALL_GAS`) |
 | Calls LEAVING an L2 (`EEZL2.executeCrossChainCall` — top-level `proxyEntryHash` match AND the nested `expectedOutgoingHash` key) | **`uint64(gasleft())` when `USE_GAS_LEFT`, else `0`** |
