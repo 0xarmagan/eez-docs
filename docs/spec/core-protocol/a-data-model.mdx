@@ -19,7 +19,7 @@ The L2 structs are deliberately **leaner**: L2 has a single rollup, no state del
 
 ### RollupUpdate (L1 only)
 
-Describes one rollup's state transition caused by executing one entry. The pre-state binding lives on the entry: `currentRoot` is checked at consumption time against `rollups[delta.rollupId].root`; mismatch reverts `RootMismatch`. This makes entries content-addressed against the trajectory the proof committed to and is the soundness backstop that lets the per-rollup queue model interleave consumption across rollups safely.
+Describes one rollup's state transition caused by executing one entry. The pre-state binding lives on the entry: `currentRoot` is checked at consumption time against `rollups[delta.rollupId].root`; a mismatch skips a queued candidate (`ExecutionNotFound` if none matches), while direct immediate execution reverts `RootMismatch`. This makes entries content-addressed against the trajectory the proof committed to and is the soundness backstop that lets the per-rollup queue model interleave consumption across rollups safely.
 
 Every entry must carry **at least one** `RollupUpdate`, and the deltas must be **strictly increasing by `rollupId`** — both enforced **on-chain** at batch validation (`EntryHasNoRollupUpdates`, `RollupUpdatesNotStrictlyIncreasing`; the ≥1 check is re-asserted in `_executeEntry`). An empty `rollupUpdates[]` would leave the entry unpinned from any rollup trajectory (nothing for the `RootMismatch` backstop to check); strict ordering rejects duplicate rollups and (starting above `MAINNET_ROLLUP_ID`) a mainnet delta. The prover remains responsible for `rollupUpdates` being the entry's *true* state transition.
 
@@ -127,6 +127,7 @@ L2:
 
 Both sides:
 - SUCCESS rows of the unified reentrant table carry `revertedOrStaticRollingHash == bytes32(0)` — the field is only read on the STATIC / REVERTED paths. *(Defensive check at resolution: `SuccessRowWithRevertedOrStaticHash`.)*
+- **One static row per key.** A nested static read changes neither `_rollingHash` nor the cursor, so two identical reads with no recorded call between them share one key and both resolve to the first matching row. The prover therefore emits one static row per key, and identical reads in the same position must expect the same result, callbacks included. If the target changes local state between two such reads (so their callback results differ), the second read cannot be expressed: the builder separates them with a recorded call or splits them across entries. *Circuit / builder rule.*
 - Static sub-calls carry `revertNextNCalls == 0` — static resolution has no state to roll back. *(Defensive check in `_processNStaticCalls`: `StaticCallWithRevertSpan`.)*
 - Tables contain exactly the rows/entries the simulated trace resolves; anything beyond is inert padding. *Circuit-only.*
 
@@ -241,7 +242,7 @@ There is **no transient flat-call cursor**: the position inside a flat call arra
 
 `MAINNET_ROLLUP_ID = 0` is a constant (uint64). The five rolling-hash tag constants `CALL_BEGIN=1, CALL_END=2, NESTED_BEGIN=3, NESTED_END=4, CALL_NOT_FOUND=5` plus the readability constants `NOT_STATIC_CALL = false` / `IS_STATIC = true` are internal constants on `EEZBase`. There is no `_inPostBatch` flag — `postAndVerifyBatch` reentry is detected via `_insideExecution() || _transientEntries.length != 0`.
 
-`_transientEntries` / `_transientStaticEntries` / `_verifiedRollupInCurrentExecutingEntry` are declared as regular storage arrays (not Solidity `transient`) because the `transient` data location does not yet support reference types with nested dynamic arrays; they are cleared at the end of every `postAndVerifyBatch` via `delete`, recovering most of the gas cost via SSTORE-to-zero refunds. The immediate-L2Tx reentrant table is the exception: it lives in a hand-serialized EIP-1153 transient region (`src/base/ExpectedL1ToL2CallTransient.sol`), so it never touches storage and rolls back with reverts automatically.
+`_transientEntries` / `_transientStaticEntries` are declared as regular storage arrays (not Solidity `transient`) because the `transient` data location does not yet support reference types with nested dynamic arrays; they are cleared at the end of every `postAndVerifyBatch` via `delete`, potentially earning storage refunds, capped at 20% of transaction gas under Ethereum rules and applied only after execution. The verified-rollup set and immediate-L2Tx reentrant table instead use EIP-1153 transient storage. The latter lives in a hand-serialized EIP-1153 transient region (`src/base/ExpectedL1ToL2CallTransient.sol`), so it never touches storage and rolls back with reverts automatically.
 
 ### EEZL2.sol (L2) — inherits `EEZBase`
 
@@ -258,7 +259,7 @@ L2-specific storage:
 
 The shared rolling-hash transient fields, proxy registry, and base-event/error set are inherited from `EEZBase`.
 
-Immutables: `ROLLUP_ID` (non-zero; 0 reverts `InvalidRollupId` — it is the mainnet sentinel in call hashes), `SYSTEM_ADDRESS`, and `USE_GAS_LEFT` (`callGas` in outgoing hashes: `gasleft()` when true, `0` when false). `RECOVERY_ADDRESS()` returns `SYSTEM_ADDRESS` (on L1 it is a distinct immutable).
+Immutables: `ROLLUP_ID` (non-zero; 0 reverts `InvalidRollupId` — it is the mainnet sentinel in call hashes), `SYSTEM_ADDRESS` (not validated; `address(0)` is accepted for chains whose system caller is the zero address), and `USE_GAS_LEFT` (`callGas` in outgoing hashes: `gasleft()` when true, `0` when false). `RECOVERY_ADDRESS()` returns `SYSTEM_ADDRESS` (on L1 it is a distinct immutable).
 
 ## A.3 Transient Variables and `_insideExecution`
 

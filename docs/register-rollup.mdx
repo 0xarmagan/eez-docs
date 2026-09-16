@@ -37,7 +37,7 @@ constructor(
 )
 ```
 
-The constructor reverts `InvalidConfig` if `rollupsRegistry` is `address(0)`, if `proofSystems.length != vkeys.length`, or if any `vkey` is zero; it reverts `ProofSystemAlreadyAllowed` on a duplicate proof system. There is no central registry of proof systems — you are responsible for vetting each verifier before adding it.
+The constructor reverts `InvalidConfig` if `rollupsRegistry` is `address(0)`, if `proofSystems.length != vkeys.length`, or if any `vkey` is zero; it reverts `ProofSystemAlreadyAllowed` on a duplicate proof system, and `ThresholdNotMet` if you supply fewer proof systems than the threshold. There is no central registry of proof systems — you are responsible for vetting each verifier before adding it.
 
 Deploy it directly with `forge create` (no dedicated deploy script ships in `eez-core-protocol` for a standalone manager — the repo's own scripted deploys, like `DeployEEZL1` in `script/e2e/shared/DeployInfra.s.sol`, are wired for local e2e devnets, not a generic external rollup):
 
@@ -50,10 +50,10 @@ forge create src/rollupContract/Rollup.sol:Rollup \
 
 ### 2. Register the manager with the `EEZ` registry
 
-Call `registerRollup` on the central registry, passing your deployed manager and your rollup's genesis state root. The registry assigns the next sequential ID (`++rollupCounter`, starting at `1`; `MAINNET_ROLLUP_ID = 0` is reserved for L1), stores the initial state root, and emits `RollupCreated(rollupId, rollupContract, initialState)`.
+Call `registerRollup` on the central registry — **from the manager's owner account** — passing your deployed manager and your rollup's genesis state root. The registry forwards the caller to your manager, which rejects anyone but its current owner, so nobody can register your pre-deployed manager out from under you. The registry assigns the next sequential ID (`++rollupCounter`, starting at `1`; `MAINNET_ROLLUP_ID = 0` is reserved for L1), stores the initial state root, and emits `RollupCreated(rollupId, rollupContract, initialRoot)`.
 
 ```solidity
-function registerRollup(address rollupContract, bytes32 initialState)
+function registerRollup(address rollupContract, bytes32 initialRoot)
     external
     returns (uint64 rollupId)
 ```
@@ -61,12 +61,12 @@ function registerRollup(address rollupContract, bytes32 initialState)
 Reverts `InvalidRollupContract` if `rollupContract` is `address(0)` or the registry itself.
 
 ```bash
-cast send $EEZ "registerRollup(address,bytes32)" $ROLLUP_CONTRACT $INITIAL_STATE \
+cast send $EEZ "registerRollup(address,bytes32)" $ROLLUP_CONTRACT $INITIAL_ROOT \
   --rpc-url $L1_RPC --private-key $PK
 
 # Confirm the assigned rollupId and stored state root on-chain:
 cast call $EEZ "rollups(uint64)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
-# Returns: (rollupContract, initialState, etherBalance)
+# Returns: (rollupContract, root, etherBalance)
 ```
 
 ### 3. The one-shot registration callback (automatic)
@@ -74,14 +74,15 @@ cast call $EEZ "rollups(uint64)(address,bytes32,uint256)" 1 --rpc-url $L1_RPC
 As part of the same transaction, `registerRollup` calls back into your manager:
 
 ```solidity
-function rollupContractRegistered(uint64 _rollupId) external {
-    if (msg.sender != ROLLUPS) revert NotEEZRegistry();  // registry-only
-    if (rollupId != 0) revert AlreadyRegistered();        // one-shot
+function rollupContractRegistered(uint64 _rollupId, address registrant) external {
+    if (msg.sender != ROLLUPS) revert NotEEZRegistry();   // registry-only
+    if (rollupId != 0) revert AlreadyRegistered();         // one-shot
+    if (registrant != owner()) revert UnauthorizedRegistrantAccount(registrant);
     rollupId = _rollupId;
 }
 ```
 
-This writes the assigned `rollupId` into your manager's storage, replacing the `0` "not yet registered" sentinel. It accepts the call only from the registry and only once, so a manager can never be silently re-registered under a different ID. After this fires, the registry tracks your rollup's state root and deferred execution queue under that `rollupId`, and the `rollupContract` pointer is immutable.
+This writes the assigned `rollupId` into your manager's storage, replacing the `0` "not yet registered" sentinel. Three checks gate it: only the registry may call, only once, and the original registrant — the account that called `registerRollup`, forwarded by the registry as `registrant` — must be the manager's current owner. So a manager can never be silently re-registered under a different ID, and nobody else can claim your deployed manager. After this fires, the registry tracks your rollup's state root and deferred execution queue under that `rollupId`, and the `rollupContract` pointer is immutable.
 
 ---
 
